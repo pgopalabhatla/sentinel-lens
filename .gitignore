@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+# dataset is regenerable: python -m sentinel_sim.generate --out data --seed 7
+data/
