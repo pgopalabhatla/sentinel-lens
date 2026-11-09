@@ -19,12 +19,14 @@ MAD_TO_SIGMA = 1.4826  # makes MAD comparable to a standard deviation for normal
 
 
 def seasonal_scores(series: pd.Series, threshold: float = 6.0, floor: float = 0.05,
-                    days: int = 7, min_days: int = 3) -> pd.DataFrame:
+                    days: int = 7, min_days: int = 1) -> pd.DataFrame:
     """Score every reading of `series` against the same time of day on the previous `days` days.
 
     threshold  |z| above this marks a reading as hot (column `hot`)
     floor      wobble is at least this fraction of the expected value
-    min_days   readings with fewer usable history days than this get no score (NaN)
+    min_days   readings with fewer usable history days than this get no score (NaN). Default 1:
+               batch pods exist ~30 min a day at shifting times, and requiring 3 days cost two
+               Spark OOM incidents on train with no precision gain.
     """
     s = series.astype(float)
     # Same time of day on each previous day, aligned back onto this series' timestamps.

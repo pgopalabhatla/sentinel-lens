@@ -14,6 +14,12 @@ Seasonal baseline detector.
   (e.g. "lag is 9.4x expected for this time of day").
 - Parameters: threshold (default 6), floor fraction (default 0.05).
 - Use only past data for each score (no future values).
+- Missing values (NaN) are skipped when computing the median and MAD. A gap is never treated as 0.
+- Parameter `min_days` (default 1): only score a reading if at least `min_days` of the previous 7 days
+  have data at that time. Otherwise leave z as NaN and treat the reading as "not hot" (no score, no alert).
+  Add a column `baseline_days` showing how many past days were used.
+  Why 1, not 3: batch Spark pods only exist about 30 minutes a day, so requiring 3 days of history
+  missed INC-001 and INC-010 on train (recall 0.5 instead of 0.7).
 
 ## 2. `sentinel_lens/detectors/persistence.py`
 - A function that takes a boolean "hot" series (z above threshold) and returns the alert times where
@@ -25,6 +31,8 @@ Seasonal baseline detector.
 - a sustained step: alert at the 3rd hot reading
 - median 5 / MAD 1 example: 9.45 is just over z=3, 0.55 is just under (use floor=0 for this test)
 - no-leakage test: changing values after time T must not change any score at or before T
+- cold start: a reading with fewer than `min_days` of history gets no score and no alert
+- gaps: NaN values in the history are ignored, not counted as zero
 
 ## 4. `scripts/score_seasonal.py`
 - Run detector + persistence on the same gauge series the quickstart uses.
