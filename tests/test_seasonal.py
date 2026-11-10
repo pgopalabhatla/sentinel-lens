@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from sentinel_lens.detectors.seasonal import seasonal_scores
-from tests.helpers import daily_series, last_day
+from tests.helpers import daily_series, day_of, last_day, weekly_series
 
 
 def test_flat_series_has_no_hot_readings():
@@ -71,3 +71,98 @@ def test_no_leakage_future_changes_do_not_affect_past_scores():
     before = seasonal_scores(s).set_index("ts").loc[:cut]
     after = seasonal_scores(changed).set_index("ts").loc[:cut]
     pd.testing.assert_frame_equal(before, after)
+
+
+# --- history modes (5 weeks starting Mon 2026-01-05; the last week is Mon Feb 2 - Sun Feb 8)
+
+MODES = ["previous_days", "same_weekday", "day_type"]
+LAST_SATURDAY, LAST_WEDNESDAY = "2026-02-07", "2026-02-04"
+
+
+def scores_on(s, date, **kwargs):
+    return seasonal_scores(s, **kwargs).set_index("ts").loc[day_of(s, date)]
+
+
+def test_normal_saturday_is_hot_with_previous_days_history():
+    # reproduces the bug: 5 of the previous 7 days are weekdays, so "expected" is the weekday level
+    sat = scores_on(weekly_series(), LAST_SATURDAY, history="previous_days")
+    assert sat.hot.mean() > 0.9
+    assert (sat.direction[sat.hot] == "down").all()
+
+
+@pytest.mark.parametrize("mode", ["same_weekday", "day_type"])
+def test_normal_saturday_is_not_hot_with_weekend_aware_history(mode):
+    sat = scores_on(weekly_series(), LAST_SATURDAY, history=mode)
+    assert not sat.hot.any()
+    assert sat.expected.mean() == pytest.approx(40, abs=2)      # the weekend level, not the weekday 100
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_real_weekday_drop_is_hot_in_every_mode(mode):
+    s = weekly_series()
+    s[day_of(s, LAST_WEDNESDAY)] *= 0.4
+    wed = scores_on(s, LAST_WEDNESDAY, history=mode)
+    assert wed.hot.all() and (wed.direction == "down").all()
+
+
+def test_history_mode_baseline_days():
+    s = weekly_series()
+    assert (scores_on(s, LAST_SATURDAY, history="previous_days").baseline_days == 7).all()
+    assert (scores_on(s, LAST_SATURDAY, history="same_weekday").baseline_days == 4).all()
+    assert (scores_on(s, LAST_SATURDAY, history="day_type").baseline_days == 5).all()
+    # first Saturday of the data: no earlier weekend day exists
+    first_sat = scores_on(s, "2026-01-10", history="day_type")
+    assert (first_sat.baseline_days == 0).all() and first_sat.z.isna().all()
+
+
+def test_day_type_uses_the_most_recent_days_of_the_same_type():
+    # Monday's history is the previous Tue-Fri and Mon, never the weekend in between
+    s = weekly_series(noise=0.0)
+    s[day_of(s, "2026-01-31")] = 1e6                            # Saturday before the last Monday
+    s[day_of(s, "2026-02-01")] = 1e6                            # Sunday before the last Monday
+    mon = scores_on(s, "2026-02-02", history="day_type")
+    assert not mon.hot.any() and (mon.baseline_days == 5).all()
+
+
+def test_same_weekday_with_one_or_no_prior_week():
+    s = weekly_series(weeks=2)
+    out = seasonal_scores(s, history="same_weekday")
+    week1, week2 = out.iloc[: 7 * 288], out.iloc[7 * 288:]
+    assert (week1.baseline_days == 0).all() and week1.z.isna().all() and not week1.hot.any()
+    assert (week2.baseline_days == 1).all() and week2.z.notna().all()
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_explanation_names_the_history_and_its_size(mode):
+    row = seasonal_scores(weekly_series(), history=mode).iloc[-1]
+    words = {"previous_days": "baseline: 7 values from the previous 7 days",
+             "same_weekday": "baseline: 4 values from the same weekday in the previous 4 weeks",
+             "day_type": "baseline: 5 values from the last 5 days of the same type (weekday/weekend)"}
+    assert words[mode] in row.explanation
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_no_leakage_in_every_history_mode(mode):
+    s = weekly_series()
+    cut = day_of(s, LAST_SATURDAY)[100]
+    changed = s.copy()
+    changed[changed.index > cut] = 1e6
+    before = seasonal_scores(s, history=mode).set_index("ts").loc[:cut]
+    after = seasonal_scores(changed, history=mode).set_index("ts").loc[:cut]
+    pd.testing.assert_frame_equal(before, after)
+
+
+@pytest.mark.parametrize("mode,full,with_gap", [("same_weekday", 4, 3), ("day_type", 5, 5)])
+def test_nan_gap_is_skipped_not_treated_as_zero(mode, full, with_gap):
+    s = weekly_series()
+    s[day_of(s, "2026-01-31")] = np.nan                         # the Saturday one week earlier is missing
+    sat = scores_on(s, LAST_SATURDAY, history=mode)
+    # same_weekday loses one value; day_type reaches one day further back to keep 5
+    assert (sat.baseline_days == with_gap).all()
+    assert sat.expected.mean() == pytest.approx(40, abs=2)      # a gap read as 0 would pull this down
+    assert not sat.hot.any()
+
+
+def test_unknown_history_mode_raises():
+    with pytest.raises(ValueError, match="history"):
+        seasonal_scores(weekly_series(weeks=1), history="lunar")
