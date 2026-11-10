@@ -166,3 +166,37 @@ def test_nan_gap_is_skipped_not_treated_as_zero(mode, full, with_gap):
 def test_unknown_history_mode_raises():
     with pytest.raises(ValueError, match="history"):
         seasonal_scores(weekly_series(weeks=1), history="lunar")
+
+
+# --- absolute floor
+
+def mostly_zero_series(last_value):
+    """8 days of 5-minute readings that are 0 except for the very last one."""
+    s = daily_series(level=0.0, amplitude=0.0, noise=0.0)
+    s.iloc[-1] = last_value
+    return s
+
+
+def test_small_blip_on_zero_baseline_is_hot_without_abs_floor():
+    row = seasonal_scores(mostly_zero_series(0.2)).iloc[-1]      # reproduces the bug: wobble is 0
+    assert row.expected == 0 and row.wobble == 0 and row.hot
+
+
+def test_abs_floor_ignores_small_blip_but_not_a_real_jump():
+    blip = seasonal_scores(mostly_zero_series(0.2), abs_floor=1.0).iloc[-1]
+    assert blip.wobble == 1.0 and blip.z == pytest.approx(0.2) and not blip.hot
+    jump = seasonal_scores(mostly_zero_series(10.0), abs_floor=1.0).iloc[-1]
+    assert jump.z == pytest.approx(10.0) and jump.hot and jump.direction == "up"
+
+
+def test_abs_floor_only_matters_when_it_is_the_largest_term():
+    # level 100: the relative floor is already 5, so an absolute floor of 1 changes nothing
+    s = daily_series()
+    pd.testing.assert_frame_equal(seasonal_scores(s, abs_floor=1.0), seasonal_scores(s))
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_abs_floor_zero_gives_exactly_the_old_results(mode):
+    s = weekly_series()
+    pd.testing.assert_frame_equal(seasonal_scores(s, history=mode, abs_floor=0.0),
+                                  seasonal_scores(s, history=mode))

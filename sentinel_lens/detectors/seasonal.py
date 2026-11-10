@@ -3,7 +3,7 @@
 For a reading at time t, the history is the values at the same time of day on a set of earlier days
 (which days depends on the `history` mode, see `seasonal_scores`).
     expected = median(history)
-    wobble   = max(1.4826 * MAD(history), floor * |expected|)
+    wobble   = max(1.4826 * MAD(history), floor * |expected|, abs_floor)
     z        = (value - expected) / wobble
 
 Only past values are used, so a score never depends on anything after its own timestamp.
@@ -46,11 +46,14 @@ def _history(s: pd.Series, history: str, days: int, weeks: int, n_days: int) -> 
 
 def seasonal_scores(series: pd.Series, threshold: float = 6.0, floor: float = 0.05,
                     days: int = 7, min_days: int = 1, history: str = "previous_days",
-                    weeks: int = 4, n_days: int = 5) -> pd.DataFrame:
+                    weeks: int = 4, n_days: int = 5, abs_floor: float = 0.0) -> pd.DataFrame:
     """Score every reading of `series` against the same time of day on earlier days.
 
     threshold  |z| above this marks a reading as hot (column `hot`)
     floor      wobble is at least this fraction of the expected value
+    abs_floor  wobble is at least this much, in the series' own unit: the smallest change worth
+               caring about. Needed when expected is 0, where the relative floor is 0 too.
+               Default 0.0 (off). Choose it per series, outside the detector.
     history    which earlier days form the baseline:
                "previous_days"  each of the previous `days` days (default). Simple, but a weekend
                                 reading is compared with a mostly-weekday history.
@@ -63,7 +66,7 @@ def seasonal_scores(series: pd.Series, threshold: float = 6.0, floor: float = 0.
 
     Column `baseline_days` is how many history values each score rests on. Read it before trusting
     a score: with 1 value the "median" is that value and MAD is 0, with 2 it is their average, so
-    one unusual earlier day moves the baseline directly and only the floor sets the wobble. The
+    one unusual earlier day moves the baseline directly and only the floors set the wobble. The
     median starts to shrug off a single odd day from 3 values. `same_weekday` reaches 3 values only
     after 3 weeks of data.
     """
@@ -76,7 +79,7 @@ def seasonal_scores(series: pd.Series, threshold: float = 6.0, floor: float = 0.
         mad = np.nanmedian(np.abs(past - expected), axis=0)
     expected[n_used < min_days] = np.nan
 
-    wobble = np.maximum(MAD_TO_SIGMA * mad, floor * np.abs(expected))
+    wobble = np.maximum(np.maximum(MAD_TO_SIGMA * mad, floor * np.abs(expected)), abs_floor)
     value = s.to_numpy()
     diff = value - expected
     with np.errstate(all="ignore"):
