@@ -232,3 +232,15 @@ What this says:
 - job_run_baseline (5 alerts) and counter_rule (2 false) are too few for their AUC to mean anything.
 
 Nothing is chosen. `DEFAULT_FORMULA` is still (1), put there as a placeholder before this experiment; it is the weakest of the four here and should be replaced once a formula is decided. An option the experiment points to but does not test: give the yes/no guardrails a fixed score instead of forcing them through r.
+
+## Nov 10, score decision
+
+Decision: the default score is severity. Hard guardrails (counter_rule, above_zero, failed_run, sla_breach) score exactly 1.0; every other detector scores 0.5 + 0.5 x (1 - exp(-(r - 1))) with r = measure / alert line, kept in [0.5, 1): 0.50 at the line, 0.82 at twice the line, 0.93 at three times, never 1.0.
+
+Reason, in one line: no formula could tell true alerts from false alarms on train, so the score should not pretend to be a probability; it states how far past the line an alert is, puts the always-bad guardrails on top, and never gives 0 to an alert that has fired.
+
+- It is documented in `sentinel_lens/alerts.py` as severity, not the probability of being real.
+- The exponential shape is formula (2) from the experiment, the one with the fewest ties, moved up into [0.5, 1) so that an alert at its line scores 0.5 instead of 0.
+- start_late is not in the guardrail list, so it always scores 0.5 (it fires exactly at its line).
+- Which alerts fire is unchanged: train is still recall 1.0, precision 0.604, 275 alerts, 103 false alarms. On train only the 19 guardrail alerts score exactly 1.0; seasonal alerts have a median of 0.93.
+- The four experimental formulas and `scripts/score_formulas.py` are kept as they were.
