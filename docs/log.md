@@ -173,3 +173,24 @@ Does `--seed` change the incident schedule? (`python scripts/compare_seeds.py`, 
 - Different: metric values (37% of cells equal, 7 of 164 series identical, all of them counters or under-replicated partitions), log and event contents, DAG run start times (by seconds) and durations (median 0.25 min, at most 5.9 min). Seven of the 12 train incident windows move a little: starts by at most 1.9 min, ends by up to 8 min; INC-006, 007, 008, 009 and 012 are identical.
 - Test week, counts only: 5 of 11 incidents differ, in start, end, key-signal windows and Spark app ids, the same kinds of fields as on train.
 - Consequence: another seed is a noise replicate of the same incidents, not an independent set of incidents. It can show how stable a result is against noise; it cannot serve as fresh incidents to validate on.
+
+## Nov 10, saturation forecast
+
+New detector `sentinel_lens/detectors/saturation.py` (branch `saturation-forecast`): at each 5-minute reading, fit a least-squares line to the last 60 minutes; hot only if the slope is positive, R2 >= 0.9, the fitted value is at least 50% of the limit, and the limit would be reached within 4 hours; then 3-of-5. Limits are `memory_limit_bytes` per pod from the topology. The router can send the 25 `container_memory_working_set_bytes` series to it with `route_series(saturation=True, limits=...)`; it is off by default, so the router defaults and the pinned train result are unchanged. Defaults only, nothing tuned. Train, `python scripts/score_saturation.py`:
+
+| setup | recall | precision | alerts | false alarms | median TTD (min) | INC-007 | INC-001 | INC-010 |
+|---|---|---|---|---|---|---|---|---|
+| (a) current: routed + job run baseline, memory on seasonal fallback | 1.0 | 0.604 | 275 | 103 | 10.4 | 75 | 10.8 | 24.3 |
+| (b) memory on forecast only | 1.0 | 0.493 | 221 | 105 | 10.4 | 330 | 10.8 | 24.3 |
+| (c) forecast in addition to seasonal | 1.0 | 0.597 | 278 | 106 | 10.4 | 75 | 10.8 | 24.3 |
+
+The forecast does not improve detection on train, and that is the result, not a tuning problem.
+- No incident is lost in (b) or (c). In (b) INC-007 is found after 330 min instead of 75; nothing else moves. In (c) nothing moves at all: the forecast adds 3 alerts and all 3 are false alarms.
+- Why INC-007 is late: the leak is slow, 48-61 MB/h on a 1 GiB limit, about 5-6% of the limit per hour, so the climb from the usual 39% takes 10-13 hours. "Full within 4 hours" is only true above roughly 76-81% usage, which is 5.5 hours into the incident. The seasonal baseline flags the same pods after 75 min because 45% is already unusual for them. The forecast answers "when does it run out", not "is this unusual", and for a slow leak the second question fires first.
+- INC-001 and INC-010 (executor OOM) are invisible to the forecast: batch executors exist for about 30 minutes, so they never fill a 60-minute window. Their healthy runs also climb from 0.7 to 3.1 GiB in 20 minutes every night, a perfect line towards the limit, which is why the detector requires a mostly full window (`min_coverage=0.8`, an addition to the given design). Both incidents are still caught by the restart counter and the seasonal rules.
+- The 3 false alarms are one episode: kafka-2 climbing at about 650 MB/h from 56% to 72% of its 4 GiB limit on Oct 14 04:15-05:30, the hour after the planned broker restart (INC-008).
+- On their own, the memory series give 91 alerts (89 true, 1 false) on the seasonal fallback and 37 alerts (34 true, 3 false) on the forecast.
+
+Report-only sweep (window 30/60/120 min, horizon 2/4/8 h, min usage 0.3/0.5/0.7): recall stays 1.0 everywhere. No setting finds INC-007 sooner than seasonal's 75 min. Horizon is the only parameter that matters: 2 h finds it at about 445-450 min, 4 h at 320-330 min, 8 h at 75-85 min (with min usage 0.3 or 0.5; 260-265 min at 0.7) but with 6 to 44 forecast false alarms. Window and min usage barely change anything at 2 h and 4 h.
+
+Where this leaves it: the forecast stays off by default. Its alerts are few and almost all true, and each one carries something the seasonal alert does not ("projected to reach its 1.0 GiB limit in ~3.6 h"), so its natural use is as urgency on top of an existing anomaly rather than as the first detector. Not decided here.
