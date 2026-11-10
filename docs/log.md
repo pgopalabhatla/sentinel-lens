@@ -144,3 +144,32 @@ Report-only experiment, default unchanged (`python scripts/experiment_count_min_
 Per-incident times to detect are identical at all four values. At 1, 2 or 3, trino_failed_queries_per_min can alert again (its largest rise over expected on train is 4.4): it raises one scored alert, a true one, and no false alarm. At 1 three false alarms appear on other count-like series. airflow_queued_tasks and airflow_task_completions_per_min cannot alert at any of the four values: their largest rise on train is 0.4. So on train the choice between 2, 3 and 6 is worth one true alert and nothing else; it does not decide itself from this data.
 
 Not done yet, by decision: cold-start guard for thin baselines, severity.
+
+## Nov 10, combined result and job run follow-ups
+
+Combined train result after merging the job run baseline and the router settings into main (`python scripts/score_job_runs.py`):
+
+| system | recall | precision | alerts | false alarms | median TTD (min) |
+|---|---|---|---|---|---|
+| routed system (router defaults) | 0.8 | 0.608 | 270 | 100 | 9.0 |
+| routed system + job run baseline | 1.0 | 0.604 | 275 | 103 | 10.4 |
+
+The job run baseline adds 5 alerts: 2 true and 3 false. INC-004 is detected 27.8 min after its start and INC-011 after 25.5 min, both at the end of the slow customer_agg run. The other 10 incidents keep exactly the same time to detect; the median rises to 10.4 only because these two join the list. The "previous numbers" row in the script now shows the current router default (0.8 / 0.608 / 270 / 100).
+
+The 3 hourly_quality_check false alarms (`python scripts/diagnose_job_runs.py`, diagnosis only, no fix chosen):
+
+| run end | duration (min) | earlier runs | history median | MAD | 1.4826 x MAD | 5% floor | wobble | set by | z |
+|---|---|---|---|---|---|---|---|---|---|
+| Oct 8 03:10 | 4.72 | 243 | 1.60 | 0.167 | 0.247 | 0.08 | 0.247 | MAD | 12.6 |
+| Oct 9 13:09 | 4.58 | 277 | 1.60 | 0.167 | 0.247 | 0.08 | 0.247 | MAD | 12.1 |
+| Oct 14 10:10 | 5.15 | 394 | 1.60 | 0.150 | 0.222 | 0.08 | 0.222 | MAD | 16.0 |
+
+- The wobble is tiny in minutes: 13 to 15 seconds, set by the MAD each time (the 5% floor would be 5 seconds; the job run detector has no absolute floor). A run only 1.3 to 1.5 min over the median is already hot.
+- These are not borderline runs, though: each took about 3 min longer than usual, three times the median. Over warm-up and train, 4 of 504 runs took longer than 4 min (p99 is 2.3 min), so this DAG has an occasional slow run about once every five days that the labels do not count as an incident.
+- For scale only: an absolute floor would have to ignore excesses of up to about 3.6 min to silence all three.
+
+Does `--seed` change the incident schedule? (`python scripts/compare_seeds.py`, seeds 7 and 8 generated into a temporary directory; `data/` untouched and confirmed equal to a fresh seed-7 run.) No: the schedule is fixed and only the noise changes.
+- Same in both seeds: all 23 incident ids; for the 12 train incidents the scenario, the day, the affected entities and the key-signal series; all 16 changes before the test week (identical, including timestamps); all 547 DAG run ids with the same state and SLA result; catalog and topology.
+- Different: metric values (37% of cells equal, 7 of 164 series identical, all of them counters or under-replicated partitions), log and event contents, DAG run start times (by seconds) and durations (median 0.25 min, at most 5.9 min). Seven of the 12 train incident windows move a little: starts by at most 1.9 min, ends by up to 8 min; INC-006, 007, 008, 009 and 012 are identical.
+- Test week, counts only: 5 of 11 incidents differ, in start, end, key-signal windows and Spark app ids, the same kinds of fields as on train.
+- Consequence: another seed is a noise replicate of the same incidents, not an independent set of incidents. It can show how stable a result is against noise; it cannot serve as fresh incidents to validate on.
