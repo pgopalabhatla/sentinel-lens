@@ -64,3 +64,20 @@ Still open:
 - 208 false alarms remain. 139 are `container_cpu_throttled_ratio`: a ratio that normally sits near 0.003-0.005, so tiny absolute moves are large relative ones. Its unit is "ratio", so floor (a) does not cover it.
 - day_type raises false alarms outside the top 10 (92 to about 200). 81 of the 208 fall on the first train weekend (Oct 10-11), when only 2-3 earlier weekend days exist; `baseline_days` shows this.
 - With day_type alone, INC-009 shows a time to detect of -2 min: an alert just before the labelled start. It goes back to 8 min once the count-unit floor is on, so that "faster" detection was most likely a false alarm that happened to land in the window (not checked further).
+
+## Nov 9, job run baseline
+
+New detector `sentinel_lens/detectors/job_runs.py`: each finished successful DAG run is compared with that DAG's own earlier finished successful runs (median, 1.4826 x MAD, 5% floor, threshold 6: the same maths as the seasonal detector, now shared in `detectors/robust.py`). One run is one observation, so there is no persistence; the alert is at the run's end. A run needs 5 earlier runs to be scored. Defaults only, nothing tuned. Scored on train with `python scripts/score_job_runs.py`.
+
+| system | recall | precision | alerts | false alarms | median TTD (min) |
+|---|---|---|---|---|---|
+| routed system (before) | 0.8 | 0.427 | 378 | 208 | 9.0 |
+| routed system + job run baseline | 1.0 | 0.427 | 383 | 211 | 10.4 |
+
+- It catches the two data-skew incidents nothing else saw: INC-004 (customer_agg took 28.6 min against ~14.5, z=15.4, found 27.8 min after the start) and INC-011 (26.3 min against ~15.0, z=13.8, found after 25.5 min). Both runs succeeded inside the 60 min SLA, which is why the schedule watcher was blind to them. Train recall is now 1.0.
+- All 10 previously detected incidents keep exactly the same time to detect. The median rises from 9.0 to 10.4 only because two new detections of about 26 min join the list; nothing got slower.
+- Cost: 3 false alarms, all on hourly_quality_check, which normally takes 1.6 min and occasionally 4.6-5.2 min. With hundreds of earlier runs the wobble is tight (0.22-0.25 min), so a 3-minute slip scores z=12-16. Three more such alerts fell in the warm-up week. Not tuned away: a likely fix is an absolute floor in minutes, as for the count-like series, but that is a separate decision.
+- A detection can only come when the run ends, so time to detect equals the run's duration. Flagging a run while it is still going past its expected duration would be faster; not built.
+- Cold start: 15 runs skipped (the first 5 of each DAG), all in the warm-up week, none in train.
+
+Diagnostic for input-size normalization (healthy runs only, nothing built): customer_agg duration follows input_rows closely (Pearson r = 0.87, about 1.5 min per million rows, 19 runs); daily_orders weakly (r = 0.52, 19 runs); hourly_quality_check has no input_rows. Both skew incidents happened on low-input days (7.2M and 7.8M rows against a usual 9-9.6M), so normalizing would have made them stand out more, not less; without it they were still caught at z > 13.
