@@ -38,3 +38,13 @@ def test_scale_floor_is_zero_when_there_is_nothing_to_calibrate_from():
 
 def test_scale_floor_skips_missing_readings():
     assert abs_floor_from_scale(series([np.nan, 10, 10, np.nan, 10]), fraction=0.1) == pytest.approx(1.0)
+
+
+def test_min_change_is_the_floor_times_the_threshold():
+    from sentinel_lens.calibration import abs_floor_from_min_change
+    assert abs_floor_from_min_change(6.0) == 1.0                      # the count floor, stated as a change
+    assert abs_floor_from_min_change(0.18) == pytest.approx(0.03)
+    assert abs_floor_from_min_change(3.0, threshold=3.0) == 1.0
+    assert abs_floor_from_min_change(0.0) == 0.0
+    with pytest.raises(ValueError):
+        abs_floor_from_min_change(1.0, threshold=0.0)

@@ -7,6 +7,9 @@ Two ways, compared on train in scripts/score_noise_fixes.py:
     abs_floor_from_unit    a fixed amount for things that are counted in whole items
     abs_floor_from_scale   a fraction of the series' own level in a known-quiet calibration period
 
+`abs_floor_from_min_change` converts the number a person can reason about ("ignore changes smaller
+than X") into the floor the detector takes.
+
 Nothing here reads the sample data: pass a unit string or a pandas Series in.
 """
 from __future__ import annotations
@@ -18,6 +21,19 @@ import pandas as pd
 # least 1. Per-second rates and ratios are left out: 1 msg/s or a ratio of 1.0 means something
 # entirely different from one series to the next, so no single number fits them.
 COUNT_UNITS = ("count", "queries", "tasks", "messages", "partitions", "queries/min", "tasks/min")
+
+
+def abs_floor_from_min_change(min_change: float, threshold: float = 6.0) -> float:
+    """The absolute floor that makes `min_change` the smallest change that can be hot.
+
+    A reading is hot when |value - expected| > threshold x wobble, and wobble >= abs_floor, so a
+    floor of f silently means "ignore changes up to threshold x f". Stating the setting as the
+    change itself keeps that visible: min_change 6.0 with threshold 6 is a floor of 1.0.
+    `threshold` must be the threshold the detector is run with.
+    """
+    if threshold <= 0:
+        raise ValueError("threshold must be positive")
+    return min_change / threshold
 
 
 def abs_floor_from_unit(unit: str, count_floor: float = 1.0) -> float:

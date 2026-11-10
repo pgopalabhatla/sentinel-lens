@@ -24,7 +24,7 @@ from scripts.score_router import routed_detections
 from scripts.score_seasonal import DATA, START, TRAIN_END, ds
 from sentinel_lens.detectors.persistence import persistent_alerts
 from sentinel_lens.detectors.seasonal import seasonal_scores
-from sentinel_lens.router import DEFAULT_COUNT_FLOOR, route_series
+from sentinel_lens.router import DEFAULT_COUNT_MIN_CHANGE, route_series
 from sentinel_sim.evaluate import evaluate_detections
 from sentinel_sim.replay import load_labels
 
@@ -163,10 +163,10 @@ def seasonal_alerts(routes: pd.DataFrame, floor: float) -> pd.DataFrame:
 
 
 def floor_semantics(default_dets: pd.DataFrame, default_res: dict):
-    heading("3. Floor semantics: what does count_floor = 1.0 cost?")
+    heading("3. Floor semantics: what does the count floor (1.0, i.e. count_min_change 6.0) cost?")
     print(f"A reading is hot when |value - expected| > threshold x wobble, and wobble >= abs_floor.\n"
-          f"With threshold {THRESHOLD:g} and count_floor {DEFAULT_COUNT_FLOOR:g}, a count-like series must move by more "
-          f"than {THRESHOLD * DEFAULT_COUNT_FLOOR:g} units\n(on a 5-minute average, in 3 of 5 readings) before it can "
+          f"With threshold {THRESHOLD:g} and an absolute floor of {DEFAULT_COUNT_MIN_CHANGE / THRESHOLD:g}, a count-like series "
+          f"must move by more than {DEFAULT_COUNT_MIN_CHANGE:g} units\n(on a 5-minute average, in 3 of 5 readings) before it can "
           "alert, whatever its history looks like.\n")
 
     with_floor = route_series(catalog).set_index("series_id")
@@ -193,12 +193,12 @@ def floor_semantics(default_dets: pd.DataFrame, default_res: dict):
     print(pd.DataFrame(rows).to_string(index=False))
 
     # incidents: measured with the floor on and off, everything else identical
-    off_dets, _ = routed_detections(count_floor=0.0)
+    off_dets, _ = routed_detections(count_min_change=0.0)
     off_res = score(off_dets)
     routes = route_series(catalog)
     others = default_dets[~default_dets.rule.isin(["seasonal", "seasonal fallback"])]
     rel_off = score(pd.concat([seasonal_alerts(routes, floor=0.0), others]))
-    no_floor_routes = route_series(catalog, count_floor=0.0)
+    no_floor_routes = route_series(catalog, count_min_change=0.0)
     both_off = score(pd.concat([seasonal_alerts(no_floor_routes, floor=0.0), others]))
 
     variants = {"router defaults (count floor 1.0, 5% floor)": default_res,

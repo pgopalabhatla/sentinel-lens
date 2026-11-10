@@ -73,6 +73,13 @@ def test_other_rules_carry_no_seasonal_settings():
 
 
 def test_first_build_settings_are_still_available():
-    routes = route_series(catalog(), history="previous_days", count_floor=0.0)
+    routes = route_series(catalog(), history="previous_days", count_min_change=0.0)
     seasonal = routes[routes.rule == "seasonal"]
     assert (seasonal.history == "previous_days").all() and (seasonal.abs_floor == 0.0).all()
+
+
+def test_count_min_change_is_converted_with_the_threshold():
+    lag = "kafka_consumergroup_lag|orders-etl"
+    assert route_series(catalog()).set_index("series_id").abs_floor[lag] == 1.0           # 6.0 / 6.0
+    assert route_series(catalog(), count_min_change=3.0).set_index("series_id").abs_floor[lag] == 0.5
+    assert route_series(catalog(), count_min_change=3.0, threshold=3.0).set_index("series_id").abs_floor[lag] == 1.0
