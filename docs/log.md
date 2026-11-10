@@ -194,3 +194,41 @@ The forecast does not improve detection on train, and that is the result, not a 
 Report-only sweep (window 30/60/120 min, horizon 2/4/8 h, min usage 0.3/0.5/0.7): recall stays 1.0 everywhere. No setting finds INC-007 sooner than seasonal's 75 min. Horizon is the only parameter that matters: 2 h finds it at about 445-450 min, 4 h at 320-330 min, 8 h at 75-85 min (with min usage 0.3 or 0.5; 260-265 min at 0.7) but with 6 to 44 forecast false alarms. Window and min usage barely change anything at 2 h and 4 h.
 
 Where this leaves it: the forecast stays off by default. Its alerts are few and almost all true, and each one carries something the seasonal alert does not ("projected to reach its 1.0 GiB limit in ~3.6 h"), so its natural use is as urgency on top of an existing anomaly rather than as the first detector. Not decided here.
+
+## Nov 10, alert record and score formulas
+
+Every alert is now one record (`sentinel_lens/alerts.py`, branch `alert-record`): time, target, detector, score (0-1), direction, explanation, plus the measure and alert line the score was made from. Adapters turn each detector's output into these records (seasonal, counter_rule, above_zero, start_late / sla_breach / failed_run, job run baseline, saturation), and `to_frame` gives the scorer its ts / target / rule. The score formula is pluggable: `formula(measure, line, detector)`.
+
+- Measure and line per detector: |z| against the threshold (seasonal, job runs); horizon / time-to-full against 1 (saturation); the increase or the value against 1 (counters, above-zero); 1 against 1 for the yes/no schedule rules.
+- With persistence the alert fires where 3 of the last 5 readings are hot, which need not be a hot reading itself, so the alert carries the largest measure among the hot readings in that window, with that reading's direction and explanation.
+- Which alerts fire is unchanged: through the adapters the current system gives the same 2186 raw alerts and the same train result (recall 1.0, precision 0.604, 275 alerts, 103 false alarms).
+
+Report-only experiment (`python scripts/score_formulas.py`, train, alerts after the scorer's dedup: 157 true, 103 false, 15 expected left out). r = measure / line.
+
+| formula | pooled AUC | precision of top 10 per day | mean score, true | mean score, false | alerts at exactly 1.0 |
+|---|---|---|---|---|---|
+| (1) min(1, r/2) | 0.482 | 0.540 | 0.913 | 0.939 | 75% |
+| (2) 1 - exp(-(r-1)) | 0.558 | 0.604 | 0.721 | 0.737 | 7% |
+| (3) min(1, ln r / ln 4) | 0.560 | 0.605 | 0.678 | 0.662 | 22% |
+| (4) percentile vs. warm-up week | 0.670 | 0.632 | 0.997 | 0.997 | 17% |
+
+For reference: precision of all 275 alerts is 0.604, which is what a score that says nothing gives the top 10.
+
+Per detector AUC (only detectors with both true and false alerts):
+
+| detector | alerts (true / false) | (1) | (2) | (3) | (4) |
+|---|---|---|---|---|---|
+| seasonal fallback | 149 (112 / 31) | 0.605 | 0.630 | 0.632 | 0.621 |
+| seasonal | 101 (27 / 67) | 0.524 | 0.723 | 0.725 | 0.695 |
+| counter_rule | 16 (13 / 2) | 0.538 | 0.538 | 0.538 | 0.500 |
+| job_run_baseline | 5 (2 / 3) | 0.500 | 0.667 | 0.667 | 0.833 |
+
+What this says:
+- No formula makes the score a good ranking on train. Top-10-a-day precision is at or below the unranked 0.604 for (1)-(3) and 0.632 for (4). "How far over the line" is only weakly related to "is it a real incident": the median alert is already at 3 times its line, true or false.
+- (1) is the worst: it reaches 1.0 at twice the line, so 75% of alerts tie at 1.0 and false alarms score slightly higher on average than true ones.
+- Inside one detector all four formulas rise with the same measure, so they rank alerts the same way and differ only through ties at 0 and 1. (2) and (3) are practically identical there; the seasonal rule is where they help most (0.72).
+- The pooled differences come mostly from where the yes/no rules land. A restart or a failed run sits exactly on its line (r = 1): (2) and (3) give it 0, (1) gives 0.5, (4) gives 1.0 because nothing like it happened in the warm-up week. Those alerts are mostly true (16 of 18), so (4) wins pooled by putting them on top, not by ranking the statistical alerts better.
+- (4) is useless as a number to show: true and false alarms both average 0.997, because almost any alert is beyond 99% of a quiet week's readings. Its warm-up reference is also thin for the job run baseline (167 runs) and rests on a week in which day_type has little history.
+- job_run_baseline (5 alerts) and counter_rule (2 false) are too few for their AUC to mean anything.
+
+Nothing is chosen. `DEFAULT_FORMULA` is still (1), put there as a placeholder before this experiment; it is the weakest of the four here and should be replaced once a formula is decided. An option the experiment points to but does not test: give the yes/no guardrails a fixed score instead of forcing them through r.
