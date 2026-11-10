@@ -18,8 +18,9 @@ from sentinel_lens.detectors.job_runs import job_run_alerts, job_run_scores
 from sentinel_sim.evaluate import evaluate_detections
 
 TRAIN_START = pd.Timestamp("2026-10-05", tz="UTC")
-# Routed system before this detector (docs/log.md, "Nov 9, seasonal noise fixes").
-PREVIOUS = {"recall": 0.8, "precision": 0.427, "alerts": 378, "false_pos": 208, "median_ttd_min": 9.0}
+# Routed system without this detector, at the current router defaults (docs/log.md, "Nov 10, router
+# settings"). Also pinned by tests/test_train_regression.py; update both together.
+PREVIOUS = {"recall": 0.8, "precision": 0.608, "alerts": 270, "false_pos": 100, "median_ttd_min": 9.0}
 
 
 def score(dets: pd.DataFrame) -> dict:
