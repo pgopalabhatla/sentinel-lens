@@ -64,3 +64,36 @@ Still open:
 - 208 false alarms remain. 139 are `container_cpu_throttled_ratio`: a ratio that normally sits near 0.003-0.005, so tiny absolute moves are large relative ones. Its unit is "ratio", so floor (a) does not cover it.
 - day_type raises false alarms outside the top 10 (92 to about 200). 81 of the 208 fall on the first train weekend (Oct 10-11), when only 2-3 earlier weekend days exist; `baseline_days` shows this.
 - With day_type alone, INC-009 shows a time to detect of -2 min: an alert just before the labelled start. It goes back to 8 min once the count-unit floor is on, so that "faster" detection was most likely a false alarm that happened to land in the window (not checked further).
+
+## Nov 10, router diagnosis
+
+Diagnosis only, no detector or scoring change (`python scripts/diagnose_router.py`, train split, branch `router-diagnosis` off main, so without the job run baseline). The routed result reproduces exactly: recall 0.8, precision 0.427, 378 alerts, 208 false alarms.
+
+Where the 139 `container_cpu_throttled_ratio` false alarms come from (17 pods):
+
+| group | false alarms |
+|---|---|
+| on the Oct 10-11 weekend only (baseline of 2-3 earlier weekend days) | 54 |
+| on Oct 10-11 and inside an incident window (all INC-005) | 14 |
+| inside an incident window only, pod not in affected_entities | 42 |
+| other | 29 |
+
+The by-hand split of 54 / 56 / 29 is confirmed, with one detail: 14 alarms are in both of the first two groups, so "on Oct 10-11" is 68 in total and "inside an incident window" is 56 in total. Every alarm outside Oct 10-11 had a full 5-day baseline except one. The largest incident-window groups are INC-002 (17, traffic burst) and INC-003 (16, consumer lag, both on the orders-etl-consumer pods): the labels list the consumer group and topic, not the pods, so the scorer counts throttling on those pods as false.
+
+Floor semantics, measured. A reading is hot when |value - expected| > threshold x wobble, so count_floor 1.0 means a count-like series must move by more than 6 units on a 5-minute average.
+
+| floor setting | recall | precision | alerts | false alarms |
+|---|---|---|---|---|
+| router defaults (count floor 1.0, 5% floor) | 0.8 | 0.427 | 378 | 208 |
+| count floor off | 0.8 | 0.215 | 749 | 576 |
+| 5% floor off (what-if) | 0.9 | 0.115 | 1574 | 1380 |
+| both floors off (what-if) | 0.9 | 0.094 | 1958 | 1761 |
+
+- The count floor loses no train incident. INC-004 and INC-011 are missed with it on and with it off; none of their key-signal series has a count-like unit (they are CPU cores, GC ms/s and heap ratio on customer-agg executors).
+- INC-011 is lost to the 5% relative floor: with it, 1 of 5 readings is hot on each key series; without it, 3 of 5 and the incident is detected at 14 min. INC-004 is missed under every floor setting: the pods have 6 readings in the window, only 3 can be scored (it is Saturday Oct 10, thin weekend history) and 1 is hot, so 3-of-5 never fires. The job run baseline is what catches both.
+- The only incident the count floor changes is INC-009: 8 min with it, -2 min without. The earlier alert is on trino_failed_queries_per_min at 20:00, two minutes before the labelled start.
+- Cost that the recall number hides: with a floor of 6 units, trino_failed_queries_per_min (train max 4.6), airflow_queued_tasks (0.6) and airflow_task_completions_per_min (0.4) cannot alert upward at any value seen on train.
+
+Injection test (copy of `container_cpu_throttled_ratio|kafka-0`, 0.003 to 0.45 for 3 hours on Wed Oct 14): detected in 10 min with an absolute wobble floor of 0, 0.01, 0.02, 0.03 and 0.05; not detected at 0.08, where the smallest alertable change is 0.48 and the jump is 0.447. Raw alerts elsewhere on that series in train: 16, 6, 5, 0, 0, 0.
+
+Ratio-unit metrics: container_cpu_throttled_ratio (25 series, seasonal_baseline, cpu_throttling, warm-up median 0.003, 139 false alarms), flink_backpressure_ratio (1, saturation_forecast, backlog, 0.066, 1) and jvm_heap_used_ratio (20, saturation_forecast, jvm_heap, 0.54, 1). One floor for the unit "ratio" would not fit all three: they sit two orders of magnitude apart.
