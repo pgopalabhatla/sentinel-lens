@@ -22,7 +22,7 @@ from sentinel_lens.detectors.guardrails import above_zero_alerts, counter_increa
 from sentinel_lens.detectors.persistence import persistent_alerts
 from sentinel_lens.detectors.schedule import failed_run_alerts, schedule_alerts
 from sentinel_lens.detectors.seasonal import seasonal_scores
-from sentinel_lens.router import route_series
+from sentinel_lens.router import DEFAULT_HISTORY, route_series
 from sentinel_sim.evaluate import evaluate_detections
 
 WARMUP_END = "2026-10-05"
@@ -106,7 +106,7 @@ if __name__ == "__main__":
         results[name] = res
         return row
 
-    current = run("current", "previous_days", None)
+    current = run("before (previous_days, no floor)", "previous_days", None)
 
     def beats_current(row):
         return row["recall"] >= current["recall"] and row["false_pos"] < current["false_pos"]
@@ -122,16 +122,19 @@ if __name__ == "__main__":
         for label, f in floors.items():
             run(f"+ {best_history} + floor ({label})", best_history, f)
 
+    # what the router now hands out by default; must equal the chosen row above
+    run("router defaults", DEFAULT_HISTORY, dict(zip(seasonal_routes.series_id, seasonal_routes.abs_floor)))
+
     print(f"TRAIN split, routed system with different seasonal settings ({len(seasonal_routes)} seasonal "
           "series; counter, above-zero and schedule rules are the same in every row)\n")
     print(pd.DataFrame(rows).to_string(index=False))
 
-    print("\nHistory modes vs. the current previous_days:")
+    print("\nHistory modes vs. previous_days:")
     for h, r in history_rows.items():
         verdict = "beats it" if beats_current(r) else "does NOT beat it"
         print(f"  {h}: {verdict} (recall {r['recall']}, false alarms {r['false_pos']} vs {current['false_pos']})")
     if not winners:
-        print("  Neither history mode beats the current one on train.")
+        print("  Neither history mode beats previous_days on train.")
 
     names = list(results)
     key = {n: chr(ord("A") + i) for i, n in enumerate(names)}
@@ -139,7 +142,7 @@ if __name__ == "__main__":
 
     print("\nPer incident, time to detect in minutes (blank = missed):")
     per = {n: r["per_incident"].set_index("incident_id") for n, r in results.items()}
-    base = per["current"][["scenario", "actionable"]]
+    base = per["before (previous_days, no floor)"][["scenario", "actionable"]]
     print(base.join(pd.DataFrame({key[n]: p.ttd_min for n, p in per.items()})).round(1).to_string(na_rep=""))
 
     print("\nFalse alarms on the 10 series from the diagnostic (after 30-minute dedup):")

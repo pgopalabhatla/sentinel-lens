@@ -4,7 +4,8 @@
     python scripts/score_router.py
 
 Routed system:
-    seasonal / seasonal fallback   5-minute averages, 3-of-5 persistence
+    seasonal / seasonal fallback   5-minute averages, 3-of-5 persistence; history mode and absolute
+                                   floor come from the router (day_type, 1.0 for count-like units)
     counter_rule, above_zero       native 1-minute readings, no persistence
     start_late, sla_breach,        DAG runs vs. the schedule, target "dag:<dag_id>"
     failed_run
@@ -32,15 +33,20 @@ RULE_ORDER = ["counter_rule", "above_zero", "seasonal", "seasonal fallback",
               "start_late", "sla_breach", "failed_run"]
 
 
-def routed_detections():
-    routes = route_series(ds.series(layer=[1, 2, 3]))
+FIRST_BUILD = {"history": "previous_days", "count_floor": 0.0}   # seasonal settings before the noise fixes
+
+
+def routed_detections(**route_settings):
+    """Alerts of the routed system. `route_settings` go to route_series; none = the router's defaults."""
+    routes = route_series(ds.series(layer=[1, 2, 3]), **route_settings)
     parts = []
 
-    # seasonal and seasonal fallback: 5-minute steps, 3-of-5 (parameters unchanged from the first build)
+    # seasonal and seasonal fallback: 5-minute steps, 3-of-5, history and absolute floor from the router
     seasonal = routes[routes.rule == "seasonal"]
     m5 = ds.query(list(seasonal.series_id), start=START, end=TRAIN_END, step="5min")
-    for sid, fallback in zip(seasonal.series_id, seasonal.fallback):
-        hot = seasonal_scores(m5[sid]).set_index("ts").hot
+    for sid, fallback, history, abs_floor in zip(seasonal.series_id, seasonal.fallback, seasonal.history,
+                                                 seasonal.abs_floor):
+        hot = seasonal_scores(m5[sid], history=history, abs_floor=abs_floor).set_index("ts").hot
         parts.append(pd.DataFrame({"ts": persistent_alerts(hot), "target": sid,
                                    "rule": "seasonal fallback" if fallback else "seasonal"}))
 
@@ -71,12 +77,14 @@ if __name__ == "__main__":
     with np.errstate(all="ignore"):
         warnings.simplefilter("ignore", RuntimeWarning)
         naive_g, extra, seas = naive_gauge_detections(), naive_counter_and_job_detections(), seasonal_detections()
+        routed_first, _ = routed_detections(**FIRST_BUILD)
         routed, routes = routed_detections()
 
     rows, per, results = [], {}, {}
     for name, dets in [("naive (quickstart, full)", pd.concat([naive_g, extra])),
                        ("naive (gauges only)", naive_g),
                        ("seasonal everywhere", seas),
+                       ("routed system (previous_days, no abs floor)", routed_first),
                        ("routed system", routed)]:
         row, res = score(name, dets)
         rows.append(row)

@@ -3,7 +3,8 @@
     source .venv/bin/activate && export PYTHONPATH=.
     python scripts/diagnose_noise.py
 
-Takes the routed system exactly as scored by scripts/score_router.py, picks the 10 series with the most
+Takes the routed system with its first-build seasonal settings (previous_days history, no absolute
+floor: the state before docs/task-fix-seasonal-noise.md), picks the 10 series with the most
 false alarms from the seasonal rule (fallback series included, since they run the same rule), and
 prints what the seasonal detector saw on each. Nothing is changed or tuned here: the detector runs
 with its default parameters and the numbers are only printed.
@@ -27,7 +28,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from scripts.score_router import routed_detections
+from scripts.score_router import FIRST_BUILD, routed_detections
 from scripts.score_seasonal import DATA, START, TRAIN_END, ds
 from sentinel_lens.detectors.seasonal import seasonal_scores
 from sentinel_sim.evaluate import evaluate_detections
@@ -80,7 +81,7 @@ def verdict(d: dict) -> str:
 if __name__ == "__main__":
     with np.errstate(all="ignore"):
         warnings.simplefilter("ignore", RuntimeWarning)
-        dets, _ = routed_detections()
+        dets, _ = routed_detections(**FIRST_BUILD)   # the system this diagnostic was written about
     alerts = evaluate_detections(dets, DATA, split="train")["alerts_table"]
     false = alerts[(alerts["class"] == "false_positive") & alerts.rule.isin(SEASONAL_RULES)]
     per_series = false.groupby("target").size().sort_values(ascending=False)

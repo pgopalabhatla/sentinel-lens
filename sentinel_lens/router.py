@@ -1,4 +1,4 @@
-"""Router: decide which rule scores each series, from the catalog.
+"""Router: decide which rule scores each series, and with which settings, from the catalog.
 
 The catalog says what kind of signal a series is (`default_detector`); the router turns that into the
 rule we actually have today. Pass the catalog DataFrame in: nothing here reads files.
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from sentinel_lens.calibration import abs_floor_from_unit
 from sentinel_lens.detectors.guardrails import FLAT_COUNTER_METRICS, ZERO_GAUGE_METRICS
 
 # Catalog detectors that are not built yet. Their series run on the seasonal baseline for now and are
@@ -21,15 +22,29 @@ SEASONAL_FALLBACK = ("saturation_forecast", "change_point", "guardrail")
 
 RULES = ("counter_rule", "above_zero", "seasonal")
 
+# Seasonal settings chosen on train (scripts/score_noise_fixes.py, docs/log.md "Nov 9, seasonal noise fixes"):
+# false alarms 785 -> 208 with recall unchanged and no incident detected later.
+#   day_type history   weekends are compared with weekends, weekdays with weekdays
+#   count floor 1.0    for series counted in whole items, one item is never an incident
+# The first build's behaviour is route_series(catalog, history="previous_days", count_floor=0.0).
+DEFAULT_HISTORY = "day_type"
+DEFAULT_COUNT_FLOOR = 1.0
 
-def route_series(catalog: pd.DataFrame) -> pd.DataFrame:
-    """One row per catalog series: series_id, rule, fallback.
+COLUMNS = ["series_id", "rule", "fallback", "history", "abs_floor"]
 
-    Needs catalog columns series_id, metric, default_detector. An unknown default_detector raises
-    instead of being guessed, so a new kind of series cannot silently go unmonitored.
+
+def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
+                 count_floor: float = DEFAULT_COUNT_FLOOR) -> pd.DataFrame:
+    """One row per catalog series: series_id, rule, fallback, history, abs_floor.
+
+    `history` and `abs_floor` are the settings to pass to `seasonal_scores`; they are None and 0.0
+    for series on other rules. Needs catalog columns series_id, metric, unit, default_detector.
+    An unknown default_detector raises instead of being guessed, so a new kind of series cannot
+    silently go unmonitored.
     """
     rows = []
-    for sid, metric, default in zip(catalog.series_id, catalog.metric, catalog.default_detector):
+    for sid, metric, unit, default in zip(catalog.series_id, catalog.metric, catalog.unit,
+                                          catalog.default_detector):
         if metric in FLAT_COUNTER_METRICS:
             rule, fallback = "counter_rule", False
         elif metric in ZERO_GAUGE_METRICS:
@@ -40,5 +55,8 @@ def route_series(catalog: pd.DataFrame) -> pd.DataFrame:
             rule, fallback = "seasonal", True
         else:
             raise ValueError(f"no rule for {sid}: unknown default_detector {default!r}")
-        rows.append({"series_id": sid, "rule": rule, "fallback": fallback})
-    return pd.DataFrame(rows, columns=["series_id", "rule", "fallback"])
+        seasonal = rule == "seasonal"
+        rows.append({"series_id": sid, "rule": rule, "fallback": fallback,
+                     "history": history if seasonal else None,
+                     "abs_floor": abs_floor_from_unit(unit, count_floor) if seasonal else 0.0})
+    return pd.DataFrame(rows, columns=COLUMNS)
