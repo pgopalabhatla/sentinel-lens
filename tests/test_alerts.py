@@ -7,7 +7,7 @@ import pytest
 from sentinel_lens.alerts import (Alert, alerts_from_above_zero, alerts_from_counter, alerts_from_job_runs,
                                   alerts_from_saturation, alerts_from_schedule, alerts_from_seasonal,
                                   exponential_score, linear_score, log_score, percentile_formula, ratio_formula,
-                                  rescore, to_frame)
+                                  rescore, severity_score, to_frame, DEFAULT_FORMULA, GUARDRAIL_DETECTORS)
 from sentinel_lens.detectors.guardrails import above_zero_alerts, counter_increase_alerts
 from sentinel_lens.detectors.job_runs import job_run_alerts
 from sentinel_lens.detectors.persistence import persistent_alerts
@@ -84,6 +84,47 @@ def test_yes_no_rule_that_never_fired_in_the_reference_scores_one():
     assert formula(1.0, 1.0, "failed_run") == 1.0
 
 
+# ------------------------------------------------------------------ the default: severity
+def test_severity_is_the_default_formula():
+    assert DEFAULT_FORMULA is severity_score
+
+
+@pytest.mark.parametrize("detector", ["seasonal", "seasonal fallback", "job_run_baseline", "saturation", "start_late"])
+def test_severity_boundaries_for_non_guardrail_detectors(detector):
+    assert severity_score(6.0, 6.0, detector) == 0.5                                        # r = 1: at the line
+    assert severity_score(12.0, 6.0, detector) == pytest.approx(0.5 + 0.5 * (1 - math.exp(-1)))   # r = 2: 0.816
+    assert severity_score(18.0, 6.0, detector) == pytest.approx(0.5 + 0.5 * (1 - math.exp(-2)))   # r = 3: 0.932
+    for huge in (6e3, 6e9, INF):                                                            # very large r
+        score = severity_score(huge, 6.0, detector)
+        assert 0.999999 < score < 1.0                                                       # never exactly 1.0
+    assert severity_score(3.0, 6.0, detector) == 0.5                                        # below the line: clamped
+
+
+def test_severity_never_decreases_and_stays_in_half_open_range():
+    rs = [0.0, 1.0, 1.01, 1.5, 2.0, 3.0, 5.0, 10.0, 40.0, 1e6, INF]
+    scores = [severity_score(r, 1.0, "seasonal") for r in rs]
+    assert scores == sorted(scores) and all(0.5 <= s < 1.0 for s in scores)
+    assert scores[2] > 0.5                                                                  # rises right after the line
+
+
+@pytest.mark.parametrize("detector", ["counter_rule", "above_zero", "failed_run", "sla_breach"])
+def test_guardrail_detectors_score_exactly_one(detector):
+    assert detector in GUARDRAIL_DETECTORS
+    for measure in (1.0, 2.0, 16.0, 1e9):
+        assert severity_score(measure, 1.0, detector) == 1.0
+
+
+def test_only_guardrails_can_reach_exactly_one():
+    assert severity_score(INF, 6.0, "seasonal") < 1.0 == severity_score(1.0, 1.0, "failed_run")
+
+
+def test_severity_rejects_bad_input_for_non_guardrails():
+    with pytest.raises(ValueError, match="line"):
+        severity_score(1.0, 0.0, "seasonal")
+    with pytest.raises(ValueError, match="missing"):
+        severity_score(float("nan"), 6.0, "seasonal")
+
+
 # ------------------------------------------------------------------ the record
 def an_alert(**changes):
     fields = dict(time="2026-01-01T00:00:00Z", target="m|e", detector="seasonal", score=0.5, direction="up",
@@ -136,7 +177,7 @@ def test_seasonal_adapter_fires_exactly_when_persistence_does():
     first = alerts[0]
     assert first.time == start + pd.Timedelta("10min")
     assert (first.target, first.detector, first.direction, first.line) == (s.name, "seasonal", "up", 6.0)
-    assert first.measure > 6.0 and 0.5 < first.score <= 1.0
+    assert first.measure > 6.0 and 0.5 < first.score < 1.0
     assert first.explanation.startswith("test_metric (test-entity) is 2.0x expected")
 
 
@@ -170,6 +211,7 @@ def test_seasonal_adapter_handles_infinite_z():
                            "explanation": ["e"] * 3})
     for formula in (linear_score, exponential_score, log_score):
         assert alerts_from_seasonal(scores, "m|e", formula=formula)[0].score == 1.0
+    assert 0.999999 < alerts_from_seasonal(scores, "m|e")[0].score < 1.0      # default: just below 1
 
 
 def test_counter_adapter():
@@ -177,7 +219,8 @@ def test_counter_adapter():
                   name="restarts_total|orders-producer")
     alerts = alerts_from_counter(counter_increase_alerts(s), target=s.name)
     assert [(a.time, a.measure, a.line) for a in alerts] == [(s.index[2], 1.0, 1.0), (s.index[4], 2.0, 1.0)]
-    assert [a.score for a in alerts] == [0.5, 1.0]                   # default formula: r/2
+    assert [a.score for a in alerts] == [1.0, 1.0]                   # guardrail: always 1.0
+    assert [a.score for a in alerts_from_counter(counter_increase_alerts(s), s.name, formula=linear_score)] == [0.5, 1.0]
     assert alerts[0].detector == "counter_rule" and alerts[0].direction == "up"
     assert alerts[0].explanation == "restarts_total for orders-producer rose from 3 to 4"
 
@@ -199,7 +242,9 @@ def test_schedule_adapter_covers_all_three_rules():
     alerts = alerts_from_schedule(frame)
     assert sorted((a.detector, a.target) for a in alerts) == [("failed_run", "dag:b"), ("sla_breach", "dag:b"),
                                                               ("start_late", "dag:a")]
-    assert all((a.measure, a.line, a.direction, a.score) == (1.0, 1.0, "up", 0.5) for a in alerts)
+    assert all((a.measure, a.line, a.direction) == (1.0, 1.0, "up") for a in alerts)
+    # failed_run and sla_breach are guardrails; a late start is a warning at its line
+    assert {a.detector: a.score for a in alerts} == {"failed_run": 1.0, "sla_breach": 1.0, "start_late": 0.5}
     late = next(a for a in alerts if a.detector == "start_late")
     assert late.time == pd.Timestamp("2026-01-01T02:10Z") and "no run had started by 02:10" in late.explanation
 
@@ -213,7 +258,8 @@ def test_job_run_adapter_maps_slower_and_faster():
     frame = job_run_alerts(pd.DataFrame([run(i, m) for i, m in enumerate(durations)]))
     slow, fast = alerts_from_job_runs(frame)
     assert (slow.detector, slow.target, slow.direction, slow.line) == ("job_run_baseline", "dag:customer_agg", "up", 6.0)
-    assert slow.measure == pytest.approx(abs(frame.z[0])) and slow.score == 1.0
+    assert slow.measure == pytest.approx(abs(frame.z[0]))
+    assert slow.score == pytest.approx(0.5 + 0.5 * (1 - math.exp(-(slow.measure / 6.0 - 1)))) and 0.8 < slow.score < 1.0
     assert "took 28.6 min" in slow.explanation
     assert fast.direction == "down" and fast.measure > 6
 
@@ -230,5 +276,5 @@ def test_saturation_adapter():
     assert (first.detector, first.direction, first.line) == ("saturation", "up", 1.0)
     # just inside the 4 h horizon at first (r a little over 1), far more urgent at the end
     assert 1.0 < first.measure < 1.2 and 0.5 < first.score < 0.6
-    assert last.measure > 4 and last.score == 1.0
+    assert last.measure > 4 and 0.97 < last.score < 1.0
     assert first.explanation.startswith("memory rising") and "limit in ~3." in first.explanation

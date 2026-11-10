@@ -4,6 +4,22 @@ Each detector returns its own table (z-scores, counter increases, late runs, ...
 turn all of them into the same `Alert` record: time, target, detector, score (0-1), direction,
 explanation. The correlator, the feedback loop and the UI then only need to know this one shape.
 
+What the score means
+--------------------
+The score is SEVERITY: how far past its alert line the reading is. It is NOT the probability that
+the alert is a real incident. On the train split, how far over the line an alert is says little about
+whether it is real (scripts/score_formulas.py: no formula ranked true alerts clearly above false
+alarms), so do not read 0.9 as "90% likely real" and do not use the score alone to drop alerts.
+Use it to say "this one is further out than that one" for the same kind of signal.
+
+    hard guardrails (counter_rule, above_zero, failed_run, sla_breach)   always exactly 1.0
+    everything else   0.5 + 0.5 * (1 - exp(-(r - 1))),  r = measure / alert line,  kept in [0.5, 1)
+                      0.50 at the line, 0.82 at twice the line, 0.93 at three times, never 1.0
+
+A guardrail is something that is always bad (a restart, a failed run, a missed SLA), so it has no
+"how far": it is at the top. Every other alert has crossed its line, so it starts at 0.5 and rises
+towards 1 without reaching it; only guardrails score exactly 1.0.
+
 How the score is made
 ---------------------
 Every detector has a *measure* (how far out the reading is, in the detector's own terms) and an
@@ -19,8 +35,10 @@ Every detector has a *measure* (how far out the reading is, in the detector's ow
     start_late,         1 (the condition is met or it is not)     1
     sla_breach, failed_run
 
-A score formula turns (measure, line, detector) into a number in [0, 1]. It is pluggable: pass
-`formula=` to any adapter. `measure` and `line` are kept on the record so alerts can be re-scored
+A score formula turns (measure, line, detector) into a number in [0, 1]. The default is
+`severity_score` (above). It is pluggable: pass `formula=` to any adapter. The four formulas compared
+in scripts/score_formulas.py (`linear_score`, `exponential_score`, `log_score`, `percentile_formula`)
+are kept for that comparison. `measure` and `line` are kept on the record so alerts can be re-scored
 with another formula without running the detectors again.
 
 When persistence is involved (seasonal, saturation) the alert fires at the reading where 3 of the
@@ -99,8 +117,31 @@ def _isnan(v) -> bool:
     return isinstance(v, float) and math.isnan(v)
 
 
-# Placeholder default until one is chosen from scripts/score_formulas.py: the simplest to explain.
-DEFAULT_FORMULA: ScoreFormula = linear_score
+# Detectors whose alerts are always bad, whatever the amount: they score exactly 1.0.
+# start_late is deliberately not here: a late start is a warning that may still recover (the run can
+# start and finish inside its SLA); sla_breach and failed_run are the guardrails for DAG runs.
+GUARDRAIL_DETECTORS = ("counter_rule", "above_zero", "failed_run", "sla_breach")
+_JUST_BELOW_ONE = math.nextafter(1.0, 0.0)
+
+
+def severity_score(measure: float, line: float, detector: str) -> float:
+    """The default score: severity, not probability (see the module docstring).
+
+    Guardrail detectors: exactly 1.0. All others: 0.5 + 0.5 * (1 - exp(-(r - 1))) with
+    r = measure / line, clamped to [0.5, 1): 0.5 at the line, rising towards 1 and never reaching it
+    (an infinite z-score gives the largest number below 1, so 1.0 always means "guardrail").
+    """
+    if detector in GUARDRAIL_DETECTORS:
+        return 1.0
+    if line <= 0:
+        raise ValueError(f"alert line must be positive, got {line!r} for {detector}")
+    r = measure / line
+    if math.isnan(r):
+        raise ValueError(f"cannot score a missing measure for {detector}")
+    return float(min(_JUST_BELOW_ONE, max(0.5, 0.5 + 0.5 * (1 - math.exp(-(r - 1))))))
+
+
+DEFAULT_FORMULA: ScoreFormula = severity_score
 
 
 # --------------------------------------------------------------------------------------- record
@@ -109,7 +150,7 @@ class Alert:
     time: pd.Timestamp       # when the alert became true (UTC)
     target: str              # a series_id ("metric|entity") or an entity ("dag:daily_orders")
     detector: str            # the rule that raised it; this is the scorer's `rule`
-    score: float             # 0-1, from the score formula
+    score: float             # 0-1 severity (how far past the alert line), not a probability
     direction: str           # "up" or "down"
     explanation: str         # plain language, from the detector
     measure: float           # how far out, in the detector's own terms (see module docstring)
