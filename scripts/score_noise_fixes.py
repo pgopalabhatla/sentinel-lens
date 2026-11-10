@@ -38,7 +38,7 @@ DIAGNOSED = ["trino_failed_queries_per_min|trino-lakehouse", "trino_queued_queri
              "trino_completed_queries_per_min|trino-lakehouse"]
 
 catalog = ds.series(layer=[1, 2, 3])
-routes = route_series(catalog)
+routes = route_series(catalog, metric_min_change={})   # the router as it was for this comparison
 seasonal_routes = routes[routes.rule == "seasonal"]
 m5 = ds.query(list(seasonal_routes.series_id), start=START, end=TRAIN_END, step="5min")
 
@@ -122,8 +122,9 @@ if __name__ == "__main__":
         for label, f in floors.items():
             run(f"+ {best_history} + floor ({label})", best_history, f)
 
-    # what the router now hands out by default; must equal the chosen row above
-    run("router defaults", DEFAULT_HISTORY, dict(zip(seasonal_routes.series_id, seasonal_routes.abs_floor)))
+    # what the router handed out after this comparison (before per-metric minimum changes were
+    # added); must equal the chosen row above
+    run("router (day_type + count floor)", DEFAULT_HISTORY, dict(zip(seasonal_routes.series_id, seasonal_routes.abs_floor)))
 
     print(f"TRAIN split, routed system with different seasonal settings ({len(seasonal_routes)} seasonal "
           "series; counter, above-zero and schedule rules are the same in every row)\n")
