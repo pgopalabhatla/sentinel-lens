@@ -36,3 +36,31 @@ Routed system, alerts by rule after the scorer's 30-minute dedup:
 Still open: recall is 0.8, not 1.0. INC-004 and INC-011 (data skew) are still missed because of the 5% floor, and INC-007 (memory leak) still takes 75 min. Precision barely moved (0.150 to 0.164) because the new rules add 19 alerts and the 783 seasonal false alarms are untouched: 624 from seasonal series, 159 from fallback series.
 
 Caveat on INC-005: its time to detect shows as -5 min because the label starts the incident after our 02:10 alert. The scorer accepts alerts up to 5 minutes before the labelled start, so the alert only just counts.
+
+## Nov 9, seasonal noise fixes
+
+The diagnostic (`scripts/diagnose_noise.py`) showed 693 of the 783 seasonal false alarms come from 10 series with two causes: a weekend reading compared with a mostly-weekday history, and an expected value of 0 where the 5% floor is 0. Two fixes, compared on train (`python scripts/score_noise_fixes.py`). Counter, above-zero and schedule rules are the same in every row; threshold 6, 5% floor and 3-of-5 are unchanged.
+
+| seasonal settings | recall | precision | alerts | false alarms | median TTD (min) | slowest TTD (min) |
+|---|---|---|---|---|---|---|
+| before (previous_days, no abs floor) | 0.8 | 0.164 | 954 | 785 | 9.0 | 75 |
+| + same_weekday | 0.8 | 0.026 | 6038 | 5866 | 6.5 | 80 |
+| + day_type | 0.8 | 0.215 | 749 | 576 | 5.0 | 75 |
+| + abs floor (a: 1.0 for count units) | 0.8 | 0.253 | 620 | 452 | 9.0 | 75 |
+| + abs floor (b: 0.05 x warm-up p95) | 0.8 | 0.202 | 761 | 595 | 9.0 | 75 |
+| + abs floor (b: 0.2 x warm-up p95) | 0.8 | 0.470 | 124 | 61 | 10.4 | 445 |
+| **+ day_type + abs floor (a)** (chosen) | 0.8 | 0.427 | 378 | 208 | 9.0 | 75 |
+| + day_type + abs floor (b: 0.05) | 0.8 | 0.240 | 660 | 490 | 5.0 | 75 |
+| + day_type + abs floor (b: 0.2) | 0.8 | 0.500 | 119 | 55 | 9.0 | 445 |
+
+Chosen: day_type history plus an absolute floor of 1.0 for count-like units. False alarms 785 to 208, precision 0.164 to 0.427, recall still 0.8, and every incident is detected at exactly the same minute as before. These are now the router's defaults; `route_series(catalog, history="previous_days", count_floor=0.0)` gives the old behaviour.
+
+- History mode: `day_type` (the last 5 days of the same type, weekday or weekend) beats `previous_days`: the seven weekend-baseline series drop from 361 false alarms to 9. `same_weekday` does not: it is far worse (5866 false alarms), because with one warm-up week a train reading has only 1 or 2 earlier same-weekday values, so the "median" is a single earlier day and MAD is 0. It may work with months of history; it cannot be judged on this dataset.
+- Absolute floor (a), from the unit: wobble is at least 1.0 for series counted in whole items (queries, tasks, messages, per-minute counts). The three zero-expected Trino series drop from 332 false alarms to 2. Reason to defend: 0.2 of a queued query is not an incident.
+- Absolute floor (b), from the warm-up week's scale: rejected. At a small fraction (0.05 of the 95th percentile) it does nothing for the zero-expected series, whose 95th percentile is 0.2-0.4. At 0.2 it has the fewest false alarms of all (55) but only by making every series less sensitive: the memory leak (INC-007) is found after 445 minutes instead of 75. Recall stays 0.8 on paper, so by the letter of the selection rule this row wins; I rejected it because a six-hour delay on a leak is a real loss the recall number hides, and (a) is also the simpler rule (no calibration step).
+
+Still open:
+- Recall is still 0.8: INC-004 and INC-011 (data skew) are missed by every configuration here.
+- 208 false alarms remain. 139 are `container_cpu_throttled_ratio`: a ratio that normally sits near 0.003-0.005, so tiny absolute moves are large relative ones. Its unit is "ratio", so floor (a) does not cover it.
+- day_type raises false alarms outside the top 10 (92 to about 200). 81 of the 208 fall on the first train weekend (Oct 10-11), when only 2-3 earlier weekend days exist; `baseline_days` shows this.
+- With day_type alone, INC-009 shows a time to detect of -2 min: an alert just before the labelled start. It goes back to 8 min once the count-unit floor is on, so that "faster" detection was most likely a false alarm that happened to land in the window (not checked further).
