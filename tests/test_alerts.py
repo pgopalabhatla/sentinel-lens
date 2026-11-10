@@ -89,7 +89,7 @@ def test_severity_is_the_default_formula():
     assert DEFAULT_FORMULA is severity_score
 
 
-@pytest.mark.parametrize("detector", ["seasonal", "seasonal fallback", "job_run_baseline", "saturation", "start_late"])
+@pytest.mark.parametrize("detector", ["seasonal", "seasonal fallback", "job_run_baseline", "saturation"])
 def test_severity_boundaries_for_non_guardrail_detectors(detector):
     assert severity_score(6.0, 6.0, detector) == 0.5                                        # r = 1: at the line
     assert severity_score(12.0, 6.0, detector) == pytest.approx(0.5 + 0.5 * (1 - math.exp(-1)))   # r = 2: 0.816
@@ -107,7 +107,7 @@ def test_severity_never_decreases_and_stays_in_half_open_range():
     assert scores[2] > 0.5                                                                  # rises right after the line
 
 
-@pytest.mark.parametrize("detector", ["counter_rule", "above_zero", "failed_run", "sla_breach"])
+@pytest.mark.parametrize("detector", ["counter_rule", "above_zero", "start_late", "sla_breach", "failed_run"])
 def test_guardrail_detectors_score_exactly_one(detector):
     assert detector in GUARDRAIL_DETECTORS
     for measure in (1.0, 2.0, 16.0, 1e9):
@@ -243,8 +243,8 @@ def test_schedule_adapter_covers_all_three_rules():
     assert sorted((a.detector, a.target) for a in alerts) == [("failed_run", "dag:b"), ("sla_breach", "dag:b"),
                                                               ("start_late", "dag:a")]
     assert all((a.measure, a.line, a.direction) == (1.0, 1.0, "up") for a in alerts)
-    # failed_run and sla_breach are guardrails; a late start is a warning at its line
-    assert {a.detector: a.score for a in alerts} == {"failed_run": 1.0, "sla_breach": 1.0, "start_late": 0.5}
+    # all three schedule rules are guardrails
+    assert {a.detector: a.score for a in alerts} == {"failed_run": 1.0, "sla_breach": 1.0, "start_late": 1.0}
     late = next(a for a in alerts if a.detector == "start_late")
     assert late.time == pd.Timestamp("2026-01-01T02:10Z") and "no run had started by 02:10" in late.explanation
 

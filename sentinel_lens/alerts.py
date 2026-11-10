@@ -12,11 +12,13 @@ whether it is real (scripts/score_formulas.py: no formula ranked true alerts cle
 alarms), so do not read 0.9 as "90% likely real" and do not use the score alone to drop alerts.
 Use it to say "this one is further out than that one" for the same kind of signal.
 
-    hard guardrails (counter_rule, above_zero, failed_run, sla_breach)   always exactly 1.0
+    hard guardrails (counter_rule, above_zero, start_late, sla_breach,   always exactly 1.0
+                     failed_run)
     everything else   0.5 + 0.5 * (1 - exp(-(r - 1))),  r = measure / alert line,  kept in [0.5, 1)
                       0.50 at the line, 0.82 at twice the line, 0.93 at three times, never 1.0
 
-A guardrail is something that is always bad (a restart, a failed run, a missed SLA), so it has no
+A guardrail is something that is always bad (a restart, a run that did not start, a missed SLA, a
+failed run), so it has no
 "how far": it is at the top. Every other alert has crossed its line, so it starts at 0.5 and rises
 towards 1 without reaching it; only guardrails score exactly 1.0.
 
@@ -118,9 +120,9 @@ def _isnan(v) -> bool:
 
 
 # Detectors whose alerts are always bad, whatever the amount: they score exactly 1.0.
-# start_late is deliberately not here: a late start is a warning that may still recover (the run can
-# start and finish inside its SLA); sla_breach and failed_run are the guardrails for DAG runs.
-GUARDRAIL_DETECTORS = ("counter_rule", "above_zero", "failed_run", "sla_breach")
+# All three schedule rules are here: a run that has not started by its grace time is a missed
+# schedule, not a small deviation, and it fires exactly at its line, so r could never rank it.
+GUARDRAIL_DETECTORS = ("counter_rule", "above_zero", "start_late", "sla_breach", "failed_run")
 _JUST_BELOW_ONE = math.nextafter(1.0, 0.0)
 
 
