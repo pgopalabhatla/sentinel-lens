@@ -276,3 +276,45 @@ Ablation (report only):
 Time alone merges unrelated things that happen together; topology alone glues different days into one page. Only both together never merge two labeled incidents, at the price of more fragmentation.
 
 Sweep (report only; gap 10/15/30/60 min x hops 0/1/2): recall is 1.0 and merging is 0 everywhere. The gap hardly matters (10, 15 and 30 min give identical pages at 0 and 1 hop; 60 min removes 1-2 pages), because alerts inside an incident come every 5 minutes and separate episodes are hours apart. Hops matter: 0 hops gives 67 pages (2.4 per labeled incident), 1 hop 49 (1.8), 2 hops 38-39 (1.2) with precision 0.35-0.36 and a largest page of 511 alerts.
+
+## Nov 10, why incidents fragment (report only)
+
+`python scripts/diagnose_fragmentation.py`, train only. The correlator defaults (gap 15 min, 1 hop, topology as given) are unchanged. Experiments A and B were chosen AFTER seeing how the train incidents fragment, so their train numbers are optimistic by construction; they are hypotheses, not results.
+
+Why the five split incidents split (every pair of their pages):
+
+| incident | pages | (a) no topology path | (b) quiet gap | (c) path exists but is 2 hops |
+|---|---|---|---|---|
+| INC-001 | 2 | 0 | 0 | 1 |
+| INC-006 | 2 | 1 | 0 | 0 |
+| INC-007 | 5 | 0 | 4 | 6 |
+| INC-009 | 2 | 1 | 0 | 0 |
+| INC-010 | 3 | 0 | 1 | 2 |
+
+- (a) Missing edges: `spark_app:orders-stream` has no path to `topic:orders` or anything around it (INC-006), and `resource_group:adhoc` has no path to `cluster:trino-lakehouse` (INC-009). In both cases the two pages' alerts overlap in time.
+- (b) Quiet gaps: INC-007 has 130-140 min without an alert on the same consumer pod after each restart (the leak starts again from a normal level); INC-010 has 31 min between two alerts on daily-orders-exec-2.
+- (c) Hop limit: the two consumer pods are 2 hops apart (pod - consumer group - pod; INC-007), and an executor pod is 2 hops from its DAG (pod - spark job - dag; INC-001, INC-010). These are not missing edges.
+
+Experiment A, extra edges that are true of the platform (justified from the source descriptions and the catalog, not from the scorer): A1 resource_group:adhoc - cluster:trino-lakehouse; A2 spark_app:orders-stream - topic:orders; A3 flink_job:clickstream-enrich - topic:clicks; A4-A6 the three DAGs - cluster:airflow-main. Experiment B, recurrence: a page that starts with an alert on a target of an earlier page, within R minutes of that page's last alert, is attached to it.
+
+| setting | pages | TRUE | FALSE | page precision | pages per labeled incident (mean / max) | pages covering 2+ labeled | largest page (alerts) |
+|---|---|---|---|---|---|---|---|
+| default | 49 | 19 | 28 | 0.404 | 1.8 / 5 | 0 | 248 |
+| A1 only | 48 | 18 | 28 | 0.391 | 1.7 / 5 | 0 | 248 |
+| A2 only | 47 | 18 | 27 | 0.400 | 1.7 / 5 | 0 | 248 |
+| A3 only, or A4-A6 only | 49 | 19 | 28 | 0.404 | 1.8 / 5 | 0 | 248 |
+| A1-A6 together | 46 | 17 | 27 | 0.386 | 1.6 / 5 | 0 | 248 |
+| entities sharing a catalog source_id joined (77 edges) | 40 | 14 | 24 | 0.368 | 1.3 / 3 | 0 | 511 |
+| B, 60 min | 48 | 18 | 28 | 0.391 | 1.7 / 5 | 0 | 248 |
+| B, 120 min | 47 | 18 | 27 | 0.400 | 1.7 / 5 | 0 | 248 |
+| B, 180 min | 44 | 15 | 27 | 0.357 | 1.4 / 2 | 0 | 260 |
+| A1-A6 + B 180 min | 41 | 13 | 26 | 0.333 | 1.2 / 2 | 0 | 260 |
+
+Recall is 1.0 and no page covers two labeled incidents in any row.
+- A (real edges) repairs exactly the two missing-edge splits (INC-006 and INC-009 become 1 page each) and nothing else; A3 and A4-A6 change nothing on train.
+- Joining by source_id makes INC-007 one page (both consumer pods are in orders-apps) but its largest page doubles to 511 alerts and it ties the two unrelated batch jobs together; it does not fix INC-006.
+- B at 60 min only closes INC-010's 31-min gap. Only 180 min closes INC-007's 130-140 min gaps (5 pages to 2), which is a window fitted to this one incident.
+- Neither A nor B touches the 2-hop splits, the most common reason.
+- Page precision goes DOWN as fragmentation is repaired (0.404 to 0.333), because the repaired pages are TRUE ones being merged; the number of FALSE pages barely moves (28 to 26). Page precision is therefore the wrong number to judge these changes by; pages per labeled incident and false pages are.
+
+Nothing is adopted.
