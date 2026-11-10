@@ -35,7 +35,7 @@ def catalog(cases=CASES):
 def test_every_series_gets_exactly_one_rule():
     cat = catalog()
     routes = route_series(cat)
-    assert list(routes.columns) == ["series_id", "rule", "fallback", "history", "min_change", "abs_floor"]
+    assert list(routes.columns) == ["series_id", "rule", "fallback", "history", "min_change", "abs_floor", "limit"]
     assert list(routes.series_id) == list(cat.series_id)      # same series, once each, same order
     assert routes.series_id.is_unique
     assert routes.rule.isin(RULES).all()
@@ -114,3 +114,40 @@ def test_metric_overrides_can_be_switched_off_or_replaced():
 def test_min_change_and_abs_floor_always_agree():
     routes = route_series(catalog())
     assert list(routes.abs_floor * 6.0) == pytest.approx(list(routes.min_change))
+
+
+# --- saturation rule (off by default)
+
+MEMORY = "container_memory_working_set_bytes|kafka-0"
+LIMITS = {"kafka-0": 4 * 1024 ** 3}
+
+
+def test_saturation_is_off_by_default():
+    routes = route_series(catalog()).set_index("series_id")
+    assert routes.rule[MEMORY] == "seasonal" and bool(routes.fallback[MEMORY])
+    assert routes.limit.isna().all()
+    assert "saturation" not in set(routes.rule)
+
+
+def test_saturation_flag_routes_only_container_memory():
+    routes = route_series(catalog(), saturation=True, limits=LIMITS).set_index("series_id")
+    assert routes.rule[MEMORY] == "saturation" and not routes.fallback[MEMORY]
+    assert routes.limit[MEMORY] == 4 * 1024 ** 3
+    assert pd.isna(routes.history[MEMORY]) and routes.abs_floor[MEMORY] == 0.0   # no seasonal settings
+    assert list(routes.index[routes.rule == "saturation"]) == [MEMORY]
+    # same catalog detector, deliberately left on the seasonal fallback
+    for sid in [HEAP, "kafka_consumergroup_lag|orders-etl"]:
+        assert routes.rule[sid] == "seasonal" and bool(routes.fallback[sid])
+    # everything else is routed exactly as without the flag
+    off = route_series(catalog()).set_index("series_id")
+    others = routes.index != MEMORY
+    pd.testing.assert_frame_equal(routes[others], off[others])
+
+
+def test_saturation_without_a_limit_raises():
+    with pytest.raises(ValueError, match="no limit for container_memory_working_set_bytes.kafka-0"):
+        route_series(catalog(), saturation=True, limits={})
+    with pytest.raises(ValueError, match="no limit"):
+        route_series(catalog(), saturation=True)
+    with pytest.raises(ValueError, match="no limit"):
+        route_series(catalog(), saturation=True, limits={"kafka-0": 0})

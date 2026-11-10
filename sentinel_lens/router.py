@@ -20,7 +20,21 @@ from sentinel_lens.detectors.guardrails import FLAT_COUNTER_METRICS, ZERO_GAUGE_
 #                                       counters and must-be-zero gauges are caught earlier by name
 SEASONAL_FALLBACK = ("saturation_forecast", "change_point", "guardrail")
 
-RULES = ("counter_rule", "above_zero", "seasonal")
+RULES = ("counter_rule", "above_zero", "seasonal", "saturation")
+
+# Metrics the saturation forecast can take over from the seasonal fallback, and only when
+# route_series(..., saturation=True) is asked for. The forecast needs a hard limit in the series' own
+# unit, and container memory has one per pod (memory_limit_bytes in the topology).
+# Deliberately NOT here, although the catalog also files them under saturation_forecast:
+#   jvm_heap_used_ratio          a healthy JVM heap is a sawtooth: it climbs to the collector's
+#                                trigger and drops, all day. A line fitted to it forecasts "full"
+#                                over and over, and 1.0 is not where the pod dies anyway.
+#   backlog series               consumer lag, queued queries/tasks, scheduling delay, backpressure:
+#   (kafka_consumergroup_lag,    there is no limit to forecast towards. A queue has no "full"; how
+#    *_queued*, ...)             much lag is too much is a judgment per consumer, not a fact in the
+#                                topology.
+# They stay on the seasonal fallback until there is a detector that fits them.
+SATURATION_METRICS = ("container_memory_working_set_bytes",)
 
 # Seasonal settings chosen on train (scripts/score_noise_fixes.py, docs/log.md "Nov 9, seasonal noise fixes"):
 # false alarms 785 -> 208 with recall unchanged and no incident detected later.
@@ -38,14 +52,15 @@ SEASONAL_THRESHOLD = 6.0     # the threshold seasonal_scores runs with; min chan
 # so a rise under ~0.2 is not informative
 METRIC_MIN_CHANGE = {"container_cpu_throttled_ratio": 0.18}
 
-COLUMNS = ["series_id", "rule", "fallback", "history", "min_change", "abs_floor"]
+COLUMNS = ["series_id", "rule", "fallback", "history", "min_change", "abs_floor", "limit"]
 
 
 def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
                  count_min_change: float = DEFAULT_COUNT_MIN_CHANGE,
                  metric_min_change: dict | None = None,
-                 threshold: float = SEASONAL_THRESHOLD) -> pd.DataFrame:
-    """One row per catalog series: series_id, rule, fallback, history, min_change, abs_floor.
+                 threshold: float = SEASONAL_THRESHOLD,
+                 saturation: bool = False, limits: dict | None = None) -> pd.DataFrame:
+    """One row per catalog series: series_id, rule, fallback, history, min_change, abs_floor, limit.
 
     `history` and `abs_floor` are the settings to pass to `seasonal_scores`; `min_change` is the
     same floor in readable form (the smallest change that can alert). They are None, 0.0 and 0.0
@@ -55,17 +70,30 @@ def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
     metric_min_change  {metric: min change}, wins over the unit rule. None = METRIC_MIN_CHANGE,
                        {} = no per-metric overrides
     threshold          the threshold seasonal_scores will be run with: abs_floor = min_change / threshold
+    saturation         False (default): nothing changes, SATURATION_METRICS stay on the seasonal
+                       fallback. True: they get the rule "saturation" and a `limit`.
+    limits             {entity: limit in the series' unit}, e.g. {pod: memory_limit_bytes}. Needed
+                       when saturation=True; a routed series without a positive limit raises.
+                       Needs the catalog column `entity`.
     An unknown default_detector raises instead of being guessed, so a new kind of series cannot
     silently go unmonitored.
     """
     overrides = METRIC_MIN_CHANGE if metric_min_change is None else metric_min_change
+    entity_of = dict(zip(catalog.series_id, catalog.entity)) if saturation else {}
     rows = []
     for sid, metric, unit, default in zip(catalog.series_id, catalog.metric, catalog.unit,
                                           catalog.default_detector):
+        limit = float("nan")
         if metric in FLAT_COUNTER_METRICS:
             rule, fallback = "counter_rule", False
         elif metric in ZERO_GAUGE_METRICS:
             rule, fallback = "above_zero", False
+        elif saturation and metric in SATURATION_METRICS:
+            rule, fallback = "saturation", False
+            limit = (limits or {}).get(entity_of[sid])
+            if limit is None or not limit > 0:
+                raise ValueError(f"no limit for {sid}: the saturation rule needs a positive limit for "
+                                 f"{entity_of[sid]!r}")
         elif default == "seasonal_baseline":
             rule, fallback = "seasonal", False
         elif default in SEASONAL_FALLBACK:
@@ -82,5 +110,5 @@ def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
         rows.append({"series_id": sid, "rule": rule, "fallback": fallback,
                      "history": history if seasonal else None,
                      "min_change": min_change,
-                     "abs_floor": abs_floor_from_min_change(min_change, threshold)})
+                     "abs_floor": abs_floor_from_min_change(min_change, threshold), "limit": limit})
     return pd.DataFrame(rows, columns=COLUMNS)

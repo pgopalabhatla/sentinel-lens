@@ -24,12 +24,13 @@ from scripts.score_seasonal import (DATA, START, TRAIN_END, ds, m, naive_counter
                                     naive_gauge_detections, seasonal_detections)
 from sentinel_lens.detectors.guardrails import above_zero_alerts, counter_increase_alerts
 from sentinel_lens.detectors.persistence import persistent_alerts
+from sentinel_lens.detectors.saturation import saturation_alerts
 from sentinel_lens.detectors.schedule import failed_run_alerts, schedule_alerts
 from sentinel_lens.detectors.seasonal import seasonal_scores
 from sentinel_lens.router import route_series
 from sentinel_sim.evaluate import evaluate_detections
 
-RULE_ORDER = ["counter_rule", "above_zero", "seasonal", "seasonal fallback",
+RULE_ORDER = ["counter_rule", "above_zero", "seasonal", "seasonal fallback", "saturation",
               "start_late", "sla_breach", "failed_run"]
 
 
@@ -49,6 +50,15 @@ def routed_detections(**route_settings):
         hot = seasonal_scores(m5[sid], history=history, abs_floor=abs_floor).set_index("ts").hot
         parts.append(pd.DataFrame({"ts": persistent_alerts(hot), "target": sid,
                                    "rule": "seasonal fallback" if fallback else "seasonal"}))
+
+    # saturation forecast (only when route_series(saturation=True, limits=...) was asked for):
+    # 5-minute steps, line over the last hour, 3-of-5
+    forecast = routes[routes.rule == "saturation"]
+    if len(forecast):
+        f5 = ds.query(list(forecast.series_id), start=START, end=TRAIN_END, step="5min")
+        for sid, limit in zip(forecast.series_id, forecast.limit):
+            parts.append(pd.DataFrame({"ts": saturation_alerts(f5[sid], limit).ts, "target": sid,
+                                       "rule": "saturation"}))
 
     # guardrails: native 1-minute readings, every hit is an alert
     for rule, detect in [("counter_rule", counter_increase_alerts), ("above_zero", above_zero_alerts)]:
