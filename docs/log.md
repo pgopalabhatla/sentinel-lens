@@ -244,3 +244,35 @@ Reason, in one line: no formula could tell true alerts from false alarms on trai
 - start_late is not in the guardrail list, so it always scores 0.5 (it fires exactly at its line).
 - Which alerts fire is unchanged: train is still recall 1.0, precision 0.604, 275 alerts, 103 false alarms. On train only the 19 guardrail alerts score exactly 1.0; seasonal alerts have a median of 0.93.
 - The four experimental formulas and `scripts/score_formulas.py` are kept as they were.
+
+## Nov 10, correlator
+
+`start_late` is now a guardrail (fixed score 1.0); which alerts fire and the train result are unchanged.
+
+New `sentinel_lens/correlator.py` (branch `correlator`): two alerts are linked if they are at most 15 minutes apart AND their entities are at most 1 hop apart in the entity graph (the 33 relationships in the topology; an alert target is mapped to its entity the way the scorer does it). An incident is a connected component of those links. Each incident carries its alerts, targets, entities, detectors, max severity and a title (the explanation of its earliest alert). Defaults only, nothing tuned. Train, `python scripts/score_incidents.py`; the scorer is untouched (a page is TRUE if it contains an alert the scorer classes 'true').
+
+Correction to an earlier number: 2,186 raw alerts is the count since Sep 28. In the train window there are 1,357 (832 true, 78 expected, 447 false); the other 829 are in the warm-up week.
+
+| | count | true | expected | false | precision |
+|---|---|---|---|---|---|
+| raw alerts (train) | 1357 | 832 | 78 | 447 | 0.650 |
+| alerts after the scorer's 30-minute dedup (today) | 275 | 157 | 15 | 103 | 0.604 |
+| pages from the correlator (gap 15 min, 1 hop) | 49 | 19 | 2 | 28 | 0.404 |
+
+- 49 pages in 14 days, 3.5 a day, instead of 275 alerts. Recall is 10 of 10 actionable incidents, and the first-alert time to detect of every labeled incident is identical to today's (the correlator drops nothing).
+- Page precision (0.404) is lower than alert precision (0.604), and that is the correlator working, not failing: a real incident's alerts collapse far more than false alarms do. 1,047 alerts become 19 TRUE pages (median 12 alerts a page), while 71 alerts become 28 FALSE pages (median 2, 11 of them a single alert). In absolute terms an engineer sees 28 false pages instead of 103 false alerts.
+- Merging: none. No page covers more than one labeled incident.
+- Fragmentation: 1.8 pages per labeled incident on average. INC-007 (memory leak) is 5 pages: the two consumer pods are 2 hops apart (pod - consumer group - pod) and each pod's sawtooth has quiet stretches longer than 15 minutes. INC-010 is 3 and INC-001 is 2: the executor pod and its DAG are 2 hops apart (pod - spark job - dag). INC-009 is 2: resource_group:adhoc has no relationship at all in the topology. INC-006 is 2: spark_app:orders-stream is not linked to the topic it reads.
+- Topology gaps found: resource_group:adhoc and dag:hourly_quality_check appear in no relationship, so their alerts can only group with themselves.
+
+Ablation (report only):
+
+| rule | pages | TRUE | FALSE | precision | pages per labeled incident | pages covering 2+ labeled | largest page (alerts) |
+|---|---|---|---|---|---|---|---|
+| time only (15 min, any entity) | 27 | 10 | 16 | 0.385 | 1.0 | 1 | 531 |
+| topology only (1 hop, any time) | 11 | 7 | 4 | 0.636 | 1.3 | 3 | 1069 |
+| both (default) | 49 | 19 | 28 | 0.404 | 1.8 | 0 | 248 |
+
+Time alone merges unrelated things that happen together; topology alone glues different days into one page. Only both together never merge two labeled incidents, at the price of more fragmentation.
+
+Sweep (report only; gap 10/15/30/60 min x hops 0/1/2): recall is 1.0 and merging is 0 everywhere. The gap hardly matters (10, 15 and 30 min give identical pages at 0 and 1 hop; 60 min removes 1-2 pages), because alerts inside an incident come every 5 minutes and separate episodes are hours apart. Hops matter: 0 hops gives 67 pages (2.4 per labeled incident), 1 hop 49 (1.8), 2 hops 38-39 (1.2) with precision 0.35-0.36 and a largest page of 511 alerts.
