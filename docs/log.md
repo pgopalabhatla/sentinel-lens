@@ -97,3 +97,33 @@ Floor semantics, measured. A reading is hot when |value - expected| > threshold 
 Injection test (copy of `container_cpu_throttled_ratio|kafka-0`, 0.003 to 0.45 for 3 hours on Wed Oct 14): detected in 10 min with an absolute wobble floor of 0, 0.01, 0.02, 0.03 and 0.05; not detected at 0.08, where the smallest alertable change is 0.48 and the jump is 0.447. Raw alerts elsewhere on that series in train: 16, 6, 5, 0, 0, 0.
 
 Ratio-unit metrics: container_cpu_throttled_ratio (25 series, seasonal_baseline, cpu_throttling, warm-up median 0.003, 139 false alarms), flink_backpressure_ratio (1, saturation_forecast, backlog, 0.066, 1) and jvm_heap_used_ratio (20, saturation_forecast, jvm_heap, 0.54, 1). One floor for the unit "ratio" would not fit all three: they sit two orders of magnitude apart.
+
+## Nov 10, router settings
+
+Router settings only; `seasonal.py` and the scorer are untouched (branch `router-settings`, on top of `router-diagnosis`). Train split.
+
+- Regression test (`tests/test_train_regression.py`, skipped when `data/` is missing): the routed train result is pinned, so a refactor cannot move it unnoticed.
+- The count floor is now stated as the change it ignores: `count_min_change = 6.0`, converted with `abs_floor_from_min_change(min_change, threshold) = min_change / threshold`. Same behaviour as `count_floor = 1.0`; the pinned result did not move (0.8 / 0.427 / 378 / 208).
+- Per-metric minimum change: `METRIC_MIN_CHANGE = {"container_cpu_throttled_ratio": 0.18}`, chosen by judgment, not tuned: healthy batch executors run near 0.3 throttled (warm-up medians 0.29-0.33 on all six batch executors), so a rise under about 0.2 is not informative. `route_series` returns a `min_change` column.
+
+| router setting | recall | precision | alerts | false alarms | median TTD (min) |
+|---|---|---|---|---|---|
+| before (no per-metric minimum change) | 0.8 | 0.427 | 378 | 208 | 9.0 |
+| throttled ratio min change 0.18 (new default) | 0.8 | 0.608 | 270 | 100 | 9.0 |
+
+Every incident is detected at exactly the same minute as before; none is later. Throttling false alarms drop from 139 to 31, and 26 of those 31 are on the two orders-etl-consumer pods on Oct 8-9, during the traffic burst and consumer-lag incidents whose labels list the consumer group, not the pods.
+
+- The injection test is now permanent (`tests/test_throttling_injection.py`, synthetic series at 0.003 with small noise): a jump to 0.45 or to 0.25 for 3 hours alerts at the third reading, a blip or a sustained rise to 0.01 does not, and the same 0.01 rise does alert when the floor is removed.
+
+Report-only experiment, default unchanged (`python scripts/experiment_count_min_change.py`):
+
+| count_min_change | recall | precision | alerts | false alarms | median TTD (min) |
+|---|---|---|---|---|---|
+| 1 | 0.8 | 0.602 | 274 | 103 | 9.0 |
+| 2 | 0.8 | 0.609 | 271 | 100 | 9.0 |
+| 3 | 0.8 | 0.609 | 271 | 100 | 9.0 |
+| 6 (default) | 0.8 | 0.608 | 270 | 100 | 9.0 |
+
+Per-incident times to detect are identical at all four values. At 1, 2 or 3, trino_failed_queries_per_min can alert again (its largest rise over expected on train is 4.4): it raises one scored alert, a true one, and no false alarm. At 1 three false alarms appear on other count-like series. airflow_queued_tasks and airflow_task_completions_per_min cannot alert at any of the four values: their largest rise on train is 0.4. So on train the choice between 2, 3 and 6 is worth one true alert and nothing else; it does not decide itself from this data.
+
+Not done yet, by decision: cold-start guard for thin baselines, severity.
