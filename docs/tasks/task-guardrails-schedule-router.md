@@ -1,3 +1,5 @@
+Status: done, merged to main (branch `guardrails-schedule-router`)
+
 # Task: counter/guardrail rules, schedule watcher, router (second build)
 
 Read CLAUDE.md and docs/log.md first. Same rules as the first build: tune on the TRAIN split only, never read

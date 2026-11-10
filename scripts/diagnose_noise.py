@@ -4,7 +4,7 @@
     python scripts/diagnose_noise.py
 
 Takes the routed system with its first-build seasonal settings (previous_days history, no absolute
-floor: the state before docs/task-fix-seasonal-noise.md), picks the 10 series with the most
+floor: the state before docs/tasks/task-fix-seasonal-noise.md), picks the 10 series with the most
 false alarms from the seasonal rule (fallback series included, since they run the same rule), and
 prints what the seasonal detector saw on each. Nothing is changed or tuned here: the detector runs
 with its default parameters and the numbers are only printed.

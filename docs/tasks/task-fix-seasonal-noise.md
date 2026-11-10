@@ -1,3 +1,5 @@
+Status: done, merged to main (branch `fix-seasonal-noise`)
+
 # Task: fix the two noise sources in the seasonal baseline
 
 Read CLAUDE.md, docs/log.md and the output of scripts/diagnose_noise.py first. Same rules as before: tune on the

@@ -1,3 +1,5 @@
+Status: done, merged to main (branch `seasonal-persistence`)
+
 # Task: seasonal baseline detector + persistence (first build)
 
 Read CLAUDE.md first. Keep each piece simple and explainable. Explain each design choice in a sentence.
