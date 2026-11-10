@@ -33,22 +33,32 @@ DEFAULT_HISTORY = "day_type"
 DEFAULT_COUNT_MIN_CHANGE = 6.0
 SEASONAL_THRESHOLD = 6.0     # the threshold seasonal_scores runs with; min changes are converted with it
 
-COLUMNS = ["series_id", "rule", "fallback", "history", "abs_floor"]
+# Per-metric minimum change, in the metric's own unit. An entry here wins over the unit rule.
+# chosen by judgment, not tuned: healthy batch executors run near 0.3 throttled,
+# so a rise under ~0.2 is not informative
+METRIC_MIN_CHANGE = {"container_cpu_throttled_ratio": 0.18}
+
+COLUMNS = ["series_id", "rule", "fallback", "history", "min_change", "abs_floor"]
 
 
 def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
                  count_min_change: float = DEFAULT_COUNT_MIN_CHANGE,
+                 metric_min_change: dict | None = None,
                  threshold: float = SEASONAL_THRESHOLD) -> pd.DataFrame:
-    """One row per catalog series: series_id, rule, fallback, history, abs_floor.
+    """One row per catalog series: series_id, rule, fallback, history, min_change, abs_floor.
 
-    `history` and `abs_floor` are the settings to pass to `seasonal_scores`; they are None and 0.0
+    `history` and `abs_floor` are the settings to pass to `seasonal_scores`; `min_change` is the
+    same floor in readable form (the smallest change that can alert). They are None, 0.0 and 0.0
     for series on other rules. Needs catalog columns series_id, metric, unit, default_detector.
 
-    count_min_change  smallest change that may alert on a count-like series (COUNT_UNITS); 0 = off
-    threshold         the threshold seasonal_scores will be run with: abs_floor = min change / threshold
+    count_min_change   smallest change that may alert on a count-like series (COUNT_UNITS); 0 = off
+    metric_min_change  {metric: min change}, wins over the unit rule. None = METRIC_MIN_CHANGE,
+                       {} = no per-metric overrides
+    threshold          the threshold seasonal_scores will be run with: abs_floor = min_change / threshold
     An unknown default_detector raises instead of being guessed, so a new kind of series cannot
     silently go unmonitored.
     """
+    overrides = METRIC_MIN_CHANGE if metric_min_change is None else metric_min_change
     rows = []
     for sid, metric, unit, default in zip(catalog.series_id, catalog.metric, catalog.unit,
                                           catalog.default_detector):
@@ -63,8 +73,14 @@ def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
         else:
             raise ValueError(f"no rule for {sid}: unknown default_detector {default!r}")
         seasonal = rule == "seasonal"
-        min_change = count_min_change if unit in COUNT_UNITS else 0.0
+        if not seasonal:
+            min_change = 0.0
+        elif metric in overrides:
+            min_change = overrides[metric]
+        else:
+            min_change = count_min_change if unit in COUNT_UNITS else 0.0
         rows.append({"series_id": sid, "rule": rule, "fallback": fallback,
                      "history": history if seasonal else None,
-                     "abs_floor": abs_floor_from_min_change(min_change, threshold) if seasonal else 0.0})
+                     "min_change": min_change,
+                     "abs_floor": abs_floor_from_min_change(min_change, threshold)})
     return pd.DataFrame(rows, columns=COLUMNS)

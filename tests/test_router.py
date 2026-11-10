@@ -6,7 +6,8 @@ from sentinel_lens.router import RULES, route_series
 UNITS = {"container_cpu_usage_cores": "cores", "kafka_messages_in_per_sec": "msg/s",
          "container_memory_working_set_bytes": "bytes", "kafka_consumergroup_lag": "messages",
          "trino_query_p95_sec": "s", "airflow_scheduler_heartbeat_age_sec": "s",
-         "trino_queued_queries": "queries", "kafka_under_replicated_partitions": "partitions"}
+         "trino_queued_queries": "queries", "kafka_under_replicated_partitions": "partitions",
+         "container_cpu_throttled_ratio": "ratio", "jvm_heap_used_ratio": "ratio"}
 
 # (metric, entity, default_detector) -> expected (rule, fallback)
 CASES = [
@@ -20,6 +21,8 @@ CASES = [
     ("kafka_consumergroup_lag", "orders-etl", "saturation_forecast", "seasonal", True),
     ("trino_query_p95_sec", "trino", "change_point", "seasonal", True),
     ("airflow_scheduler_heartbeat_age_sec", "airflow", "guardrail", "seasonal", True),
+    ("container_cpu_throttled_ratio", "kafka-0", "seasonal_baseline", "seasonal", False),
+    ("jvm_heap_used_ratio", "kafka-0", "saturation_forecast", "seasonal", True),
 ]
 
 
@@ -32,7 +35,7 @@ def catalog(cases=CASES):
 def test_every_series_gets_exactly_one_rule():
     cat = catalog()
     routes = route_series(cat)
-    assert list(routes.columns) == ["series_id", "rule", "fallback", "history", "abs_floor"]
+    assert list(routes.columns) == ["series_id", "rule", "fallback", "history", "min_change", "abs_floor"]
     assert list(routes.series_id) == list(cat.series_id)      # same series, once each, same order
     assert routes.series_id.is_unique
     assert routes.rule.isin(RULES).all()
@@ -73,9 +76,10 @@ def test_other_rules_carry_no_seasonal_settings():
 
 
 def test_first_build_settings_are_still_available():
-    routes = route_series(catalog(), history="previous_days", count_min_change=0.0)
+    routes = route_series(catalog(), history="previous_days", count_min_change=0.0, metric_min_change={})
     seasonal = routes[routes.rule == "seasonal"]
-    assert (seasonal.history == "previous_days").all() and (seasonal.abs_floor == 0.0).all()
+    assert (seasonal.history == "previous_days").all()
+    assert (seasonal.abs_floor == 0.0).all() and (seasonal.min_change == 0.0).all()
 
 
 def test_count_min_change_is_converted_with_the_threshold():
@@ -83,3 +87,30 @@ def test_count_min_change_is_converted_with_the_threshold():
     assert route_series(catalog()).set_index("series_id").abs_floor[lag] == 1.0           # 6.0 / 6.0
     assert route_series(catalog(), count_min_change=3.0).set_index("series_id").abs_floor[lag] == 0.5
     assert route_series(catalog(), count_min_change=3.0, threshold=3.0).set_index("series_id").abs_floor[lag] == 1.0
+
+
+# --- per-metric minimum change
+
+THROTTLE, HEAP = "container_cpu_throttled_ratio|kafka-0", "jvm_heap_used_ratio|kafka-0"
+
+
+def test_metric_override_sets_min_change_and_floor():
+    routes = route_series(catalog()).set_index("series_id")
+    assert routes.min_change[THROTTLE] == 0.18
+    assert routes.abs_floor[THROTTLE] == pytest.approx(0.03)          # 0.18 / threshold 6
+    assert routes.min_change[HEAP] == 0.0 and routes.abs_floor[HEAP] == 0.0   # same unit, no override
+    assert routes.min_change["kafka_consumergroup_lag|orders-etl"] == 6.0     # the unit rule still applies
+
+
+def test_metric_overrides_can_be_switched_off_or_replaced():
+    off = route_series(catalog(), metric_min_change={}).set_index("series_id")
+    assert off.min_change[THROTTLE] == 0.0 and off.abs_floor[THROTTLE] == 0.0
+    custom = route_series(catalog(), metric_min_change={"kafka_consumergroup_lag": 600.0}).set_index("series_id")
+    assert custom.min_change["kafka_consumergroup_lag|orders-etl"] == 600.0   # wins over the count rule
+    assert custom.abs_floor["kafka_consumergroup_lag|orders-etl"] == 100.0
+    assert custom.min_change[THROTTLE] == 0.0                                 # replaced table, no throttle entry
+
+
+def test_min_change_and_abs_floor_always_agree():
+    routes = route_series(catalog())
+    assert list(routes.abs_floor * 6.0) == pytest.approx(list(routes.min_change))

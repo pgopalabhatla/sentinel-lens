@@ -33,7 +33,7 @@ RULE_ORDER = ["counter_rule", "above_zero", "seasonal", "seasonal fallback",
               "start_late", "sla_breach", "failed_run"]
 
 
-FIRST_BUILD = {"history": "previous_days", "count_min_change": 0.0}   # seasonal settings before the noise fixes
+FIRST_BUILD = {"history": "previous_days", "count_min_change": 0.0, "metric_min_change": {}}   # seasonal settings before the noise fixes
 
 
 def routed_detections(**route_settings):

@@ -28,6 +28,9 @@ from sentinel_lens.router import DEFAULT_COUNT_MIN_CHANGE, route_series
 from sentinel_sim.evaluate import evaluate_detections
 from sentinel_sim.replay import load_labels
 
+# This diagnosis describes the router before per-metric minimum changes existed; pinned so its
+# output stays reproducible.
+AS_DIAGNOSED = {"metric_min_change": {}}
 EXPECTED = {"recall": 0.8, "precision": 0.427, "alerts": 378, "false_positives": 208}
 THROTTLE = "container_cpu_throttled_ratio"
 THRESHOLD = 6.0                                    # seasonal_scores default
@@ -60,8 +63,8 @@ def in_train(df: pd.DataFrame) -> pd.DataFrame:
 
 # ---------------------------------------------------------------------------------------------- 1
 def reproduce():
-    heading("1. Routed system on train (router defaults)")
-    dets, routes = routed_detections()
+    heading("1. Routed system on train (router defaults as diagnosed: no per-metric minimum change)")
+    dets, routes = routed_detections(**AS_DIAGNOSED)
     res = score(dets)
     rows = [{"metric": k, "expected": v, "measured": res[k], "match": res[k] == v} for k, v in EXPECTED.items()]
     print(pd.DataFrame(rows).to_string(index=False))
@@ -169,7 +172,7 @@ def floor_semantics(default_dets: pd.DataFrame, default_res: dict):
           f"must move by more than {DEFAULT_COUNT_MIN_CHANGE:g} units\n(on a 5-minute average, in 3 of 5 readings) before it can "
           "alert, whatever its history looks like.\n")
 
-    with_floor = route_series(catalog).set_index("series_id")
+    with_floor = route_series(catalog, **AS_DIAGNOSED).set_index("series_id")
     count_series = with_floor[(with_floor.rule == "seasonal") & (with_floor.abs_floor > 0)]
     rows = []
     for sid in count_series.index:
@@ -193,12 +196,12 @@ def floor_semantics(default_dets: pd.DataFrame, default_res: dict):
     print(pd.DataFrame(rows).to_string(index=False))
 
     # incidents: measured with the floor on and off, everything else identical
-    off_dets, _ = routed_detections(count_min_change=0.0)
+    off_dets, _ = routed_detections(count_min_change=0.0, **AS_DIAGNOSED)
     off_res = score(off_dets)
-    routes = route_series(catalog)
+    routes = route_series(catalog, **AS_DIAGNOSED)
     others = default_dets[~default_dets.rule.isin(["seasonal", "seasonal fallback"])]
     rel_off = score(pd.concat([seasonal_alerts(routes, floor=0.0), others]))
-    no_floor_routes = route_series(catalog, count_min_change=0.0)
+    no_floor_routes = route_series(catalog, count_min_change=0.0, **AS_DIAGNOSED)
     both_off = score(pd.concat([seasonal_alerts(no_floor_routes, floor=0.0), others]))
 
     variants = {"router defaults (count floor 1.0, 5% floor)": default_res,

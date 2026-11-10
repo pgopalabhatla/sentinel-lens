@@ -28,5 +28,14 @@ def train_result(**route_settings) -> dict:
     return {k: res[k] for k in BASELINE}
 
 
-def test_routed_train_result_is_unchanged():
-    assert train_result() == BASELINE
+# Router defaults since docs/log.md "Nov 10, router settings": the baseline plus
+# METRIC_MIN_CHANGE = {"container_cpu_throttled_ratio": 0.18}. Update only with a log entry saying why.
+DEFAULTS = {"recall": 0.8, "precision": 0.608, "alerts": 270, "false_positives": 100}
+
+
+def test_routed_train_result_with_router_defaults():
+    assert train_result() == DEFAULTS
+
+
+def test_routed_train_result_without_metric_overrides_is_unchanged():
+    assert train_result(metric_min_change={}) == BASELINE
