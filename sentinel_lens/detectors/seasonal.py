@@ -11,12 +11,11 @@ The detector knows nothing about the sample data; it takes any pandas Series wit
 """
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 
-MAD_TO_SIGMA = 1.4826  # makes MAD comparable to a standard deviation for normally distributed noise
+from sentinel_lens.detectors.robust import MAD_TO_SIGMA, robust_z  # noqa: F401  (MAD_TO_SIGMA re-exported)
+
 HISTORY_MODES = ("previous_days", "same_weekday", "day_type")
 DAY_TYPE_LOOKBACK_DAYS = 28
 
@@ -72,20 +71,8 @@ def seasonal_scores(series: pd.Series, threshold: float = 6.0, floor: float = 0.
     """
     s = series.astype(float)
     past, described = _history(s, history, days, weeks, n_days)
-    n_used = np.sum(~np.isnan(past), axis=0)
-    with warnings.catch_warnings():  # nanmedian warns when there is no history yet; handled below
-        warnings.simplefilter("ignore", RuntimeWarning)
-        expected = np.nanmedian(past, axis=0)
-        mad = np.nanmedian(np.abs(past - expected), axis=0)
-    expected[n_used < min_days] = np.nan
-
-    wobble = np.maximum(np.maximum(MAD_TO_SIGMA * mad, floor * np.abs(expected)), abs_floor)
     value = s.to_numpy()
-    diff = value - expected
-    with np.errstate(all="ignore"):
-        z = np.where(wobble > 0, diff / wobble, np.sign(diff) * np.inf)
-    z = np.where(diff == 0, 0.0, z)  # exact match is never anomalous, even when wobble is 0
-    z[np.isnan(expected) | np.isnan(value)] = np.nan
+    expected, wobble, z, n_used = robust_z(value, past, floor=floor, abs_floor=abs_floor, min_history=min_days)
 
     direction = np.where(z > 0, "up", np.where(z < 0, "down", None))
     out = pd.DataFrame({"ts": s.index, "value": value, "expected": expected, "wobble": wobble,
