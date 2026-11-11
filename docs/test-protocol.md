@@ -5,7 +5,11 @@ advance, what is run, what is measured and how the result may be described, so t
 be shaped afterwards. Frozen at git tag `pre-test-freeze`.
 
 Status when this was written: the test week has not been run. No detector, threshold or rule was
-developed on test data. See "Known exposure" for the one exception to "nobody has seen test labels".
+tuned on test values. One test label was seen, and one design decision was informed by knowing it
+exists: see "Known exposure to test labels".
+
+Amended after the tag, before any test run, in a docs-only commit: the wording of "Known exposure to
+test labels" and this status paragraph. Nothing under the frozen paths changed.
 
 ## What is evaluated
 
@@ -111,19 +115,10 @@ in its place.
 
 ### Known exposure to test labels
 
-The author reports that one test-week label, INC-014, described as a throttling incident, was seen
-incidentally on Nov 10 during the router work, and that no parameter was chosen from test data.
+On Nov 10, during router investigation, a grep over data/labels printed one test-split row (INC-014: container_cpu_throttled_ratio on orders-etl-consumer-0, direction up). No test values were seen. This happened BEFORE the 0.18 throttling minimum change and the injection test were chosen. 0.18 was justified from warm-up/train distributions and domain reasoning, but the decision to keep throttling detectable instead of suppressing it was informed by knowing a test throttling incident exists. INC-014 is therefore reported separately, and system 5's recall is reported with and without it.
 
-What can be checked in the repository: no script reads or prints test-split labels (they keep
-`split == "train"`; `scripts/compare_seeds.py` prints counts only for the test week). What cannot be
-checked from the repository is the order of events on Nov 10. Two settings that concern throttling
-were made that same day: the minimum change of 0.18 for `container_cpu_throttled_ratio`, and the
-injection test that requires jumps to 0.45 and to 0.25 to alert. Both were justified at the time from
-the warm-up week (healthy batch executors sit near 0.3 throttled) and from train false alarms.
-
-Because of this, INC-014 is flagged in advance. Recall will be read both with and without it, by
-hand from the per-incident table in the saved result (this is a reading fixed now, not a re-run). If
-INC-014 is detected only because of the throttling settings, that is said in the write-up.
+How "with and without" is computed: by hand from the per-incident table in the saved result, since the
+frozen runner prints recall over all actionable incidents only. This reading is fixed now; it is not a re-run.
 
 ## Predictions (to be filled in by the author BEFORE the run, then committed)
 
