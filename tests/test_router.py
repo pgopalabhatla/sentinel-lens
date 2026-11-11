@@ -35,7 +35,7 @@ def catalog(cases=CASES):
 def test_every_series_gets_exactly_one_rule():
     cat = catalog()
     routes = route_series(cat)
-    assert list(routes.columns) == ["series_id", "rule", "fallback", "history", "min_change", "abs_floor", "limit"]
+    assert list(routes.columns) == ["series_id", "rule", "fallback", "history", "min_change", "abs_floor", "limit", "change_point"]
     assert list(routes.series_id) == list(cat.series_id)      # same series, once each, same order
     assert routes.series_id.is_unique
     assert routes.rule.isin(RULES).all()
@@ -151,3 +151,22 @@ def test_saturation_without_a_limit_raises():
         route_series(catalog(), saturation=True)
     with pytest.raises(ValueError, match="no limit"):
         route_series(catalog(), saturation=True, limits={"kafka-0": 0})
+
+
+# --- change point detector, in addition to the seasonal fallback (off by default)
+
+P95 = "trino_query_p95_sec|trino"
+
+
+def test_change_point_is_off_by_default():
+    routes = route_series(catalog())
+    assert not routes.change_point.any()
+
+
+def test_change_point_flag_marks_only_catalog_change_point_series_and_keeps_their_seasonal_rule():
+    on = route_series(catalog(), change_point=True).set_index("series_id")
+    assert list(on.index[on.change_point]) == [P95]
+    assert on.rule[P95] == "seasonal" and bool(on.fallback[P95]) and on.history[P95] == "day_type"
+    # nothing else about any series changes
+    off = route_series(catalog()).set_index("series_id")
+    pd.testing.assert_frame_equal(on.drop(columns="change_point"), off.drop(columns="change_point"))

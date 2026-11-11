@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sentinel_lens.alerts import (Alert, alerts_from_above_zero, alerts_from_counter, alerts_from_job_runs,
+from sentinel_lens.alerts import (Alert, alerts_from_above_zero, alerts_from_change_point, alerts_from_counter,
+                                  alerts_from_job_runs,
                                   alerts_from_saturation, alerts_from_schedule, alerts_from_seasonal,
                                   exponential_score, linear_score, log_score, percentile_formula, ratio_formula,
                                   rescore, severity_score, to_frame, DEFAULT_FORMULA, GUARDRAIL_DETECTORS)
@@ -278,3 +279,16 @@ def test_saturation_adapter():
     assert 1.0 < first.measure < 1.2 and 0.5 < first.score < 0.6
     assert last.measure > 4 and 0.97 < last.score < 1.0
     assert first.explanation.startswith("memory rising") and "limit in ~3." in first.explanation
+
+
+def test_change_point_adapter():
+    from sentinel_lens.detectors.change_point import change_point_alerts
+    idx = pd.date_range("2026-01-01", periods=30, freq="5min", tz="UTC")
+    z = pd.Series([0.0] * 10 + [2.5] * 6 + [0.0] * 8 + [-2.5] * 6, index=idx, name="trino_query_p95_sec|trino")
+    up, down = alerts_from_change_point(change_point_alerts(z), target=z.name)
+    assert (up.time, up.detector, up.direction, up.measure, up.line) == (idx[15], "change_point", "up", 12.0, 10.0)
+    assert (down.time, down.direction) == (idx[29], "down")
+    assert up.score == pytest.approx(0.5 + 0.5 * (1 - math.exp(-(1.2 - 1))))       # severity at r = 1.2, not a guardrail
+    assert "level shifted up ~2.5 wobbles" in up.explanation
+    custom = alerts_from_change_point(change_point_alerts(z, h=5.0), target=z.name, h=5.0)
+    assert all(a.line == 5.0 and a.measure > 5.0 for a in custom)

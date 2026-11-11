@@ -52,15 +52,23 @@ SEASONAL_THRESHOLD = 6.0     # the threshold seasonal_scores runs with; min chan
 # so a rise under ~0.2 is not informative
 METRIC_MIN_CHANGE = {"container_cpu_throttled_ratio": 0.18}
 
-COLUMNS = ["series_id", "rule", "fallback", "history", "min_change", "abs_floor", "limit"]
+# The change point detector (CUSUM on the seasonal z-score) can run IN ADDITION to the seasonal
+# fallback on the series the catalog marks for it, and only when route_series(..., change_point=True)
+# is asked for. It does not replace the seasonal rule: seasonal catches the sudden large move, CUSUM
+# the small sustained one, and the series keeps its seasonal settings because CUSUM reads that z-score.
+CHANGE_POINT_CATALOG_DETECTOR = "change_point"
+
+COLUMNS = ["series_id", "rule", "fallback", "history", "min_change", "abs_floor", "limit", "change_point"]
 
 
 def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
                  count_min_change: float = DEFAULT_COUNT_MIN_CHANGE,
                  metric_min_change: dict | None = None,
                  threshold: float = SEASONAL_THRESHOLD,
-                 saturation: bool = False, limits: dict | None = None) -> pd.DataFrame:
-    """One row per catalog series: series_id, rule, fallback, history, min_change, abs_floor, limit.
+                 saturation: bool = False, limits: dict | None = None,
+                 change_point: bool = False) -> pd.DataFrame:
+    """One row per catalog series: series_id, rule, fallback, history, min_change, abs_floor, limit,
+    change_point.
 
     `history` and `abs_floor` are the settings to pass to `seasonal_scores`; `min_change` is the
     same floor in readable form (the smallest change that can alert). They are None, 0.0 and 0.0
@@ -72,6 +80,9 @@ def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
     threshold          the threshold seasonal_scores will be run with: abs_floor = min_change / threshold
     saturation         False (default): nothing changes, SATURATION_METRICS stay on the seasonal
                        fallback. True: they get the rule "saturation" and a `limit`.
+    change_point       False (default): nothing changes. True: series whose catalog detector is
+                       change_point get change_point=True in the result, meaning "also run the change
+                       point detector on this series' seasonal z-score". Their rule stays "seasonal".
     limits             {entity: limit in the series' unit}, e.g. {pod: memory_limit_bytes}. Needed
                        when saturation=True; a routed series without a positive limit raises.
                        Needs the catalog column `entity`.
@@ -110,5 +121,6 @@ def route_series(catalog: pd.DataFrame, history: str = DEFAULT_HISTORY,
         rows.append({"series_id": sid, "rule": rule, "fallback": fallback,
                      "history": history if seasonal else None,
                      "min_change": min_change,
-                     "abs_floor": abs_floor_from_min_change(min_change, threshold), "limit": limit})
+                     "abs_floor": abs_floor_from_min_change(min_change, threshold), "limit": limit,
+                     "change_point": bool(change_point and seasonal and default == CHANGE_POINT_CATALOG_DETECTOR)})
     return pd.DataFrame(rows, columns=COLUMNS)

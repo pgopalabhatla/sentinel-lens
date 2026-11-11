@@ -32,6 +32,7 @@ Every detector has a *measure* (how far out the reading is, in the detector's ow
     job_run_baseline    |z|                                       threshold (6)
     saturation          horizon / time_to_full  (1 = just inside  1
                         the horizon, 2 = full in half the horizon)
+    change_point        the running total that passed the line    h (10)
     counter_rule        increase since the previous reading       1  (one restart / one failure)
     above_zero          the value                                 1  (one partition)
     start_late,         1 (the condition is met or it is not)     1
@@ -235,6 +236,14 @@ def alerts_from_saturation(scores: pd.DataFrame, target: str, horizon_h: float =
     ts, explanation = scores.ts.to_numpy(), scores.explanation.to_numpy()
     return [_alert(ts[i], target, "saturation", urgency[j], 1.0, "up", explanation[j], formula)
             for i, j in _persistent(scores, urgency, k, n)]
+
+
+def alerts_from_change_point(frame: pd.DataFrame, target: str, h: float = 10.0,
+                             formula: ScoreFormula = DEFAULT_FORMULA) -> list[Alert]:
+    """`change_point_alerts` output -> alerts. measure = the running total that passed the line,
+    line = `h` (the one the alerts were made with). No persistence step: the total is the persistence."""
+    return [_alert(r.ts, target, "change_point", r.total, h, r.direction, r.explanation, formula)
+            for r in frame.itertuples()]
 
 
 def alerts_from_counter(frame: pd.DataFrame, target: str, formula: ScoreFormula = DEFAULT_FORMULA) -> list[Alert]:
