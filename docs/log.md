@@ -318,3 +318,31 @@ Recall is 1.0 and no page covers two labeled incidents in any row.
 - Page precision goes DOWN as fragmentation is repaired (0.404 to 0.333), because the repaired pages are TRUE ones being merged; the number of FALSE pages barely moves (28 to 26). Page precision is therefore the wrong number to judge these changes by; pages per labeled incident and false pages are.
 
 Nothing is adopted.
+
+## Nov 10, topology edges adopted
+
+Decision: six relationships that are true of the platform but missing from the generated topology are now part of the default entity graph. They live in a tracked file, `sentinel_lens/topology_extra.py` (the topology itself is in `data/`, regenerated and not in git), each with a one-line justification, and `build_topology` merges them (`extra_edges=()` gives the topology as given).
+
+Reason: the edges are structural facts about the platform, each supported by the platform's own description (source descriptions and the catalog), not by the scorer. They were chosen after seeing train: the gaps were noticed because train incidents fragmented across them. That is the honest order of events; what makes them acceptable is that each can be checked against the platform description without looking at any label.
+
+Audit (`python scripts/audit_topology.py`): of the 37 entities that are in the catalog, alert, or are scheduled DAGs, two had no relationship at all (`resource_group:adhoc`, `dag:hourly_quality_check`), and four more were cut off from what the description says they depend on. The graph had 8 connected components; it now has 3 (Kafka with its streaming consumers, Airflow with its batch jobs, Trino) and no entity without a relationship.
+
+| edge | support in the platform description |
+|---|---|
+| resource_group:adhoc - cluster:trino-lakehouse | a resource group is a query queue inside its cluster; the catalog files its series under source trino-lakehouse |
+| spark_app:orders-stream - topic:orders | "Spark Structured Streaming app orders-stream (Kafka orders -> Iceberg)" |
+| flink_job:clickstream-enrich - topic:clicks | "Flink job clickstream-enrich (Kafka clicks -> MinIO)" |
+| dag:daily_orders, dag:customer_agg, dag:hourly_quality_check - cluster:airflow-main | "Airflow (LocalExecutor). DAGs: daily_orders, customer_agg, hourly_quality_check" |
+
+Considered and not added, because the description does not state them: spark_app:orders-stream - consumer_group:orders-stream (only the names match); Trino - the Spark apps through the Iceberg tables (an inference, and there is no table entity); anything based on a shared catalog source_id.
+
+NOT adopted: the recurrence rule (experiment B) and source_id joins. `gap_min=15` and `max_hops=1` are unchanged.
+
+Train, correlator defaults (`python scripts/score_incidents.py`):
+
+| | pages | TRUE | expected | FALSE | page precision | pages per labeled incident (mean / max) | pages covering 2+ labeled | largest page (alerts) |
+|---|---|---|---|---|---|---|---|---|
+| topology as given | 49 | 19 | 2 | 28 | 0.404 | 1.8 / 5 | 0 | 248 |
+| with the six edges (default now) | 46 | 17 | 2 | 27 | 0.386 | 1.6 / 5 | 0 | 248 |
+
+Recall is still 10 of 10 and every first-alert time to detect is unchanged; the alerts themselves are untouched (1.0 / 0.604 / 275 / 103). INC-006 and INC-009 are now one page each. INC-007 (5 pages), INC-010 (3) and INC-001 (2) still split, through the 2-hop limit and quiet gaps, which these edges do not address. Page precision falls only because two pairs of TRUE pages merged. A train regression test pins the 46 pages.
