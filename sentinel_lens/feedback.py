@@ -2,6 +2,7 @@
 
 An engineer marks alerts as real or false. Labels are kept per GROUP, a kind of alert:
     series alerts   (detector, canonical event)   e.g. ("seasonal", "cpu_throttling")
+                    (detector, metric) when the catalog gives the series no canonical event
     DAG alerts      (detector, entity)            e.g. ("job_run_baseline", "dag:hourly_quality_check")
 A group is coarse on purpose: one pod's labels then help every other pod with the same kind of
 signal, and a group collects enough labels to say something.
@@ -54,13 +55,17 @@ def group_key(alert: Alert, canonical_event_of: Mapping[str, str]) -> tuple:
 
     canonical_event_of  {series_id: canonical event}, from the series catalog. A series alert whose
                         series is missing from it raises, so a new series cannot silently fall into
-                        no group.
+                        no group. A series that is listed with an empty canonical event gets its
+                        metric name instead, so unrelated metrics are not lumped into one blank group.
     """
     if "|" not in alert.target:
         return (alert.detector, alert.target)
     if alert.target not in canonical_event_of:
         raise KeyError(f"series {alert.target!r} has no canonical event in the catalog")
-    return (alert.detector, canonical_event_of[alert.target])
+    event = canonical_event_of[alert.target]
+    if not isinstance(event, str) or not event.strip():
+        event = alert.target.split("|")[0]
+    return (alert.detector, event)
 
 
 @dataclass(frozen=True)

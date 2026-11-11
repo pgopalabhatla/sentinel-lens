@@ -56,6 +56,13 @@ def test_group_key_for_series_and_dag_alerts():
         group_key(alert(0, "new_metric|x"), EVENTS)
 
 
+def test_series_without_a_canonical_event_is_grouped_by_its_metric():
+    events = {"heartbeat_age|airflow": "", "isr_shrinks|kafka": "", "queued|adhoc": float("nan")}
+    assert group_key(alert(0, "heartbeat_age|airflow"), events) == ("seasonal", "heartbeat_age")
+    assert group_key(alert(0, "isr_shrinks|kafka"), events) == ("seasonal", "isr_shrinks")     # not one blank group
+    assert group_key(alert(0, "queued|adhoc"), events) == ("seasonal", "queued")
+
+
 # ------------------------------------------------------------------ replay
 def false_run(n, start=0, step=5, target="throttle|pod-a"):
     """n alerts, `step` minutes apart, all labeled false."""
