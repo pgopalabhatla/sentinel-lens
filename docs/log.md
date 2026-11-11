@@ -378,3 +378,24 @@ The detection system is complete for the evaluation: seasonal baseline, persiste
 - Frozen feedback applied to train itself gives 35 pages and 16 false. That is in-sample twice over and is not a result; it only shows the code path works.
 
 Disclosure: On Nov 10, during router investigation, a grep over data/labels printed one test-split row (INC-014: container_cpu_throttled_ratio on orders-etl-consumer-0, direction up). No test values were seen. This happened BEFORE the 0.18 throttling minimum change and the injection test were chosen. 0.18 was justified from warm-up/train distributions and domain reasoning, but the decision to keep throttling detectable instead of suppressing it was informed by knowing a test throttling incident exists. INC-014 is therefore reported separately, and system 5's recall is reported with and without it.
+
+## Nov 11, change point detector (built after the freeze, not part of it)
+
+Built on branch `change-point`, off `test-protocol`, after the tag `pre-test-freeze` and before any test run. It is not in the frozen system and the tag is not moved; the test week has not been run.
+
+New `sentinel_lens/detectors/change_point.py`: a two-sided CUSUM on the seasonal z-score. s_up = max(0, s_up + clip(z) - k), s_down = max(0, s_down - clip(z) - k); alert when either passes h, then that side restarts. Defaults k = 0.5, h = 10, clip = 3, stated in advance and not tuned. On synthetic unit noise it behaves as designed: a 2.5-wobble shift alerts in 5-6 readings, a 1-wobble shift in about 20, a single spike of any size never alerts, and 2,000 readings of pure noise give nothing. The router can add it to the 24 series the catalog marks `change_point` with `route_series(change_point=True)` (off by default; their seasonal fallback stays).
+
+Train (`python scripts/score_change_point.py`): it does not work on this data with its defaults, and no setting in the sweep makes it useful.
+
+| system | recall | precision | alerts | false alerts | pages | false pages |
+|---|---|---|---|---|---|---|
+| (a) current system | 1.0 | 0.604 | 275 | 103 | 46 | 27 |
+| (b) change point instead of the seasonal fallback on the 24 series | 1.0 | 0.206 | 763 | 594 | 520 | 501 |
+| (c) change point in addition (what the router flag does) | 1.0 | 0.206 | 776 | 604 | 524 | 505 |
+
+- On the 24 series it raises 517 raw alerts in the train window, 5 true and 512 false (457 of them on JVM GC time). The seasonal fallback on the same series raises 83, 29 of them true.
+- No incident is lost. In (c) nothing is detected sooner or later. In (b) INC-010 is 6 minutes later and INC-012 10 minutes later, because the seasonal fallback that caught them first is gone. Change point detects no incident the current system misses and none sooner.
+- Why: the defaults assume that a quiet series gives independent z-scores of about 1 wobble. The real ones are wider and sticky. After clipping at 3, their standard deviation is 1.1 to 1.6, 36-50% of readings are more than 1 wobble out (32% expected), 1-13% sit at the clip (0.3% expected), and neighbouring readings are correlated (0.2 to 0.33). A baseline of 5 earlier days gives a noisy "expected" and a wobble that is too small, and a series that sits half a wobble off its baseline for an hour looks to CUSUM exactly like a level shift.
+- Report-only sweep (k 0.25/0.5/1, h 5/8/10/12, clip 2/3/5; 36 settings): recall is 1.0 everywhere. In (c) no setting has fewer false alerts or pages than the current system; the quietest (k 1, h 12, clip 2) raises a single alert and leaves the system as it is. In (b) a few strict settings look better than (a) (precision up to 0.64, 38-39 pages), but that comes from having removed the seasonal fallback on the noisy JVM GC series, not from change point, which raises 1-9 alerts there, and it costs INC-010 and INC-012 their first alert.
+
+Decision: none taken. The detector stays in the code, off by default. Making it usable would need a z-score whose quiet spread really is about 1 (more history than 5 days, or a per-series scale for CUSUM), which is a change to its input, not to k and h.
