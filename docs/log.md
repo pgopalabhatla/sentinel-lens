@@ -346,3 +346,24 @@ Train, correlator defaults (`python scripts/score_incidents.py`):
 | with the six edges (default now) | 46 | 17 | 2 | 27 | 0.386 | 1.6 / 5 | 0 | 248 |
 
 Recall is still 10 of 10 and every first-alert time to detect is unchanged; the alerts themselves are untouched (1.0 / 0.604 / 275 / 103). INC-006 and INC-009 are now one page each. INC-007 (5 pages), INC-010 (3) and INC-001 (2) still split, through the 2-hop limit and quiet gaps, which these edges do not address. Page precision falls only because two pairs of TRUE pages merged. A train regression test pins the 46 pages.
+
+## Nov 11, feedback loop
+
+New `sentinel_lens/feedback.py` (branch `feedback-loop`), pure and deterministic. Labels are counted per group: (detector, canonical event) for series alerts, (detector, entity) for DAG alerts. estimate = (true + 1) / (labeled + 2). A group is demoted when it has at least 10 labels and its estimate is below 0.25, i.e. at most 1 real alert in 10. A demoted alert stays attached to its page, but a page only pages if it has at least one alert that is not demoted. Defaults are stated in advance and not tuned.
+
+Online replay on train (`python scripts/score_feedback.py`): alerts in time order; labels are the scorer's own verdicts (one per target per 30 minutes; 260 labels: 157 true, 103 false; 'expected' is not a label); a label arrives 60 minutes after its alert and only affects later alerts. Which alerts fire and how they are grouped is unchanged.
+
+| | pages | TRUE | expected | FALSE | false pages per day | page precision | recall (actionable) | pages per labeled incident |
+|---|---|---|---|---|---|---|---|---|
+| before | 46 | 17 | 2 | 27 | 1.93 | 0.386 | 10 of 10 | 1.58 |
+| after feedback | 44 | 17 | 2 | 25 | 1.79 | 0.405 | 10 of 10 | 1.58 |
+
+- The effect on train is small: 2 fewer false pages. No incident stops paging. One is paged later: INC-010 at 30.3 min instead of 24.3, because its first alert is in a demoted group. All other times to detect are unchanged.
+- Why so small: the loop starts with no labels and needs 10 per group. By week: false pages go 20 to 20 in week 1 (Oct 5-11) and 7 to 5 in week 2. The first group is demoted on Oct 9 at 14:10.
+- 205 of the 1,357 raw alerts are demoted when they fire (154 the scorer calls false, 51 true), but most sit in pages that still page through another alert, so demotion mostly removes context, not pages.
+- Groups demoted at the end of train: (seasonal, cpu_throttling), 0 true / 31 false, estimate 0.03; (seasonal fallback, jvm_gc), 2 / 15, estimate 0.16. (seasonal, cpu_usage) was demoted for a while from Oct 8 and came back as true labels arrived (17 / 32, estimate 0.35). (job_run_baseline, dag:hourly_quality_check) has 0 / 3: all false, but too few labels to act on.
+- Six catalog series have no canonical event; they are grouped by metric name instead of falling into one blank group.
+
+Report-only sweep (n_min 5/10/20, tau 0.20/0.25/0.33, label delay 30/60/120 min): recall is 10 of 10 in all 27 settings and no incident stops paging. n_min decides everything: 20 does nothing (46 pages, 27 false); 10 gives 44 pages and 25 false at every tau and delay; 5 gives 39-44 pages and 20-25 false. INC-010 is 6 minutes later whenever anything is demoted. Labeling every raw alert instead of one per 30 minutes (1,279 labels) gives 42 pages and 23 false.
+
+Limits to keep in mind: the simulation assumes demoted alerts still get labeled (otherwise a demoted group could never come back), and two weeks is short for a rule that needs 10 labels per group. What the loop has learned by the end of train has not been applied to anything yet.
