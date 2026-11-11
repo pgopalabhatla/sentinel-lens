@@ -35,28 +35,16 @@ from scripts.score_incidents import DEFAULT, TRAIN_END_TS, TRAIN_START, judge_al
 from scripts.score_seasonal import DATA, ds
 from sentinel_lens.alerts import to_frame
 from sentinel_lens.correlator import Incident, build_topology, correlate
+from sentinel_lens.topology_extra import EXTRA_EDGES
 from sentinel_sim.evaluate import evaluate_detections
 
 GAP_MIN, MAX_HOPS = DEFAULT["gap_min"], DEFAULT["max_hops"]
 RECURRENCE_MIN = (60, 120, 180)
 
-# Experiment A: (child_kind, child, relation, parent_kind, parent, justification from the platform)
-REAL_EDGES = [
-    ("resource_group", "adhoc", "member_of", "cluster", "trino-lakehouse",
-     "a Trino resource group is a query queue inside its cluster; the catalog files the series "
-     "trino_resource_group_queued|adhoc under source trino-lakehouse"),
-    ("spark_app", "orders-stream", "consumes", "topic", "orders",
-     "the source description says the Spark Structured Streaming app orders-stream reads Kafka orders; the "
-     "relationships already say consumer group orders-stream consumes topic orders, but nothing ties the app to it"),
-    ("flink_job", "clickstream-enrich", "consumes", "topic", "clicks",
-     "the source description says the Flink job clickstream-enrich reads Kafka clicks; same gap as the Spark app"),
-    ("dag", "daily_orders", "scheduled_by", "cluster", "airflow-main",
-     "the source description lists daily_orders as a DAG of the Airflow instance airflow-main"),
-    ("dag", "customer_agg", "scheduled_by", "cluster", "airflow-main",
-     "the source description lists customer_agg as a DAG of airflow-main"),
-    ("dag", "hourly_quality_check", "scheduled_by", "cluster", "airflow-main",
-     "the source description lists hourly_quality_check as a DAG of airflow-main; it has no relationship at all today"),
-]
+# Experiment A: the six edges tried here were adopted afterwards and now live in the tracked list
+# sentinel_lens/topology_extra.py: (child_kind, child, relation, parent_kind, parent, justification).
+# This report still starts from the topology as given, so its numbers stay reproducible.
+REAL_EDGES = list(EXTRA_EDGES)
 EDGE_COLUMNS = ["child_kind", "child", "relation", "parent_kind", "parent"]
 
 
@@ -162,7 +150,7 @@ if __name__ == "__main__":
     everything, _ = current_alerts()
     alerts = [a for a in everything if TRAIN_START <= a.time < TRAIN_END_TS]
     relationships, catalog = ds.relationships(), ds.series()
-    topology = build_topology(relationships, catalog)
+    topology = build_topology(relationships, catalog, extra_edges=())      # the topology as given: this report's baseline
     klass, matched, _ = judge_alerts(alerts)
     klass_of, matched_of = dict(zip(alerts, klass)), dict(zip(alerts, matched))
     labeled_info = evaluate_detections(to_frame(everything), DATA, split="train")["per_incident"].set_index("incident_id")
@@ -219,12 +207,12 @@ if __name__ == "__main__":
             continue                                                  # the three DAG edges are tried together
         chosen = extra.iloc[[3, 4, 5]] if n == 3 else extra.iloc[[n]]
         label = "A4-A6 only (DAGs - Airflow)" if n == 3 else f"A{n + 1} only ({chosen.child.iloc[0]} - {chosen.parent.iloc[0]})"
-        topo = build_topology(pd.concat([relationships[EDGE_COLUMNS], chosen]), catalog)
+        topo = build_topology(pd.concat([relationships[EDGE_COLUMNS], chosen]), catalog, extra_edges=())
         rows.append(score(label, correlate(alerts, topo, **DEFAULT)))
-    topo_a = build_topology(pd.concat([relationships[EDGE_COLUMNS], extra]), catalog)
+    topo_a = build_topology(pd.concat([relationships[EDGE_COLUMNS], extra]), catalog, extra_edges=())
     rows.append(score("A1-A6 together (all real edges)", correlate(alerts, topo_a, **DEFAULT)))
     cliques = clique_edges(catalog)
-    topo_src = build_topology(pd.concat([relationships[EDGE_COLUMNS], cliques]), catalog)
+    topo_src = build_topology(pd.concat([relationships[EDGE_COLUMNS], cliques]), catalog, extra_edges=())
     rows.append(score(f"same catalog source_id joined ({len(cliques)} edges)", correlate(alerts, topo_src, **DEFAULT)))
     show(rows)
     print("   Entities that share a source_id: "
