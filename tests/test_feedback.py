@@ -5,8 +5,8 @@ import pytest
 
 from sentinel_lens.alerts import Alert
 from sentinel_lens.correlator import build_topology, correlate
-from sentinel_lens.feedback import (FALSE, LABEL_DELAY_MIN, N_MIN, TAU, TRUE, estimate, group_key, is_demoted, pages,
-                                    paging_time, replay)
+from sentinel_lens.feedback import (FALSE, LABEL_DELAY_MIN, N_MIN, TAU, TRUE, apply_frozen, demoted_groups, estimate,
+                                    group_key, is_demoted, pages, paging_time, replay)
 
 T0 = pd.Timestamp("2026-01-01T00:00:00Z")
 EVENTS = {"throttle|pod-a": "cpu_throttling", "throttle|pod-b": "cpu_throttling", "cpu|pod-a": "cpu_usage",
@@ -173,3 +173,23 @@ def test_demoted_alerts_attach_to_pages_but_cannot_page_alone():
 def test_without_demotions_every_page_pages_at_its_first_alert():
     incidents = correlate([alert(0), alert(5, "lag|group")], TOPOLOGY)
     assert all(pages(i, frozenset()) and paging_time(i, frozenset()) == i.start for i in incidents)
+
+
+# ------------------------------------------------------------------ frozen state
+def test_frozen_state_is_the_groups_demoted_by_all_labels():
+    bad, bad_labels = false_run(12)                                    # 12 false: demoted
+    few, few_labels = false_run(4, start=1, target="cpu|pod-a")        # 4 false: too few labels
+    good = [alert(2 + i, "lag|group") for i in range(12)]
+    result = replay(bad + few + good, {**bad_labels, **few_labels, **{a: TRUE for a in good}}, EVENTS)
+    assert demoted_groups(result.groups) == {("seasonal", "cpu_throttling")}
+    # every label counts, including the ones that arrive after the last alert
+    late_only, late_labels = false_run(10, step=0.1)                   # all within one second-ish, labels arrive later
+    assert replay(late_only, late_labels, EVENTS).demoted == frozenset()
+    assert demoted_groups(replay(late_only, late_labels, EVENTS).groups) == {("seasonal", "cpu_throttling")}
+
+
+def test_apply_frozen_demotes_from_the_first_alert_and_learns_nothing():
+    frozen = frozenset({("seasonal", "cpu_throttling")})
+    new = [alert(0, "throttle|pod-b"), alert(1, "cpu|pod-a"), alert(2, "throttle|pod-a"), alert(3, "dag:x", detector="failed_run")]
+    assert apply_frozen(new, frozen, EVENTS) == {new[0], new[2]}        # the very first alert is already demoted
+    assert apply_frozen(new, frozenset(), EVENTS) == frozenset()

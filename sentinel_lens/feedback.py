@@ -144,6 +144,18 @@ def replay(alerts: Iterable[Alert], labels: Mapping[Alert, str], canonical_event
     return Replay(demoted=frozenset(demoted), groups=groups, n_min=n_min, tau=tau)
 
 
+def demoted_groups(groups: Iterable[GroupState], n_min: int = N_MIN, tau: float = TAU) -> frozenset:
+    """The keys of the groups that are demoted given their final label counts: the frozen state to
+    carry into a later period."""
+    return frozenset(g.key for g in groups if is_demoted(g.true, g.false, n_min=n_min, tau=tau))
+
+
+def apply_frozen(alerts: Iterable[Alert], frozen_groups: frozenset, canonical_event_of: Mapping[str, str]) -> frozenset:
+    """The alerts that are demoted when a frozen set of demoted groups is applied unchanged: every
+    alert whose group is in the set, from the first alert on. Nothing is learned from these alerts."""
+    return frozenset(a for a in alerts if group_key(a, canonical_event_of) in frozen_groups)
+
+
 def pages(incident, demoted: frozenset) -> bool:
     """A page pages an engineer only if at least one of its alerts is not demoted."""
     return any(a not in demoted for a in incident.alerts)
