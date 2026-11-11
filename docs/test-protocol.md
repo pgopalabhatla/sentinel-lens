@@ -120,12 +120,26 @@ On Nov 10, during router investigation, a grep over data/labels printed one test
 How "with and without" is computed: by hand from the per-incident table in the saved result, since the
 frozen runner prints recall over all actionable incidents only. This reading is fixed now; it is not a re-run.
 
-## Predictions (to be filled in by the author BEFORE the run, then committed)
+## Predictions (written by the author BEFORE the run)
 
-The runner refuses to run the test week while any line below still says NOT FILLED IN.
+Recorded on 2026-11-11, after the tag `pre-test-freeze` (770fab8) and before any run on the test week,
+in a docs-only commit. They are the author's, copied as written.
 
-- Recall of system (5), as a range "k to k of n": NOT FILLED IN
-- False pages per day of system (5): NOT FILLED IN
-- Per-alert precision of system (3) and of system (5): NOT FILLED IN
-- The incident type I most expect to be missed, and why: NOT FILLED IN
-- Date and commit of these predictions: NOT FILLED IN
+```
+Recall (system 5, actionable incidents): expected 70-100%; I'd be surprised below 50%.
+  Reason: tuned on train, so some drop on unseen incidents.
+INC-014 pages under system 5: 60/40 that it does.
+  Reason: throttling group is demoted by feedback, but other detectors may page the same incident.
+False pages per day (system 5): 1-2.
+  Reason: train was 1.8; test weekends have richer history.
+Median time to detect: 7-12 min.
+Maximum time to detect: 45-75 min.
+  Reason: slow cases are leaks and slow jobs.
+Ordering on false volume: 5 <= 4 < 3 < 2 < 1 (systems 1-3 count alerts, 4-5 count pages).
+Feedback effect: system 5 has 0-2 fewer false pages than system 4.
+```
+
+No prediction was made for: per-alert precision of systems (3) and (5); which type of incident is most
+likely to be missed, other than the INC-014 line above.
+
+The runner checks that this section has been filled in before it will run the test week.
