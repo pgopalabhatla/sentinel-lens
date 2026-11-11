@@ -13,7 +13,9 @@ together even if A and C are more than `gap_min` apart, which is how a long inci
 incident as long as its alerts keep coming).
 
 Nothing here reads files. The topology is built from two plain tables: the relationships
-(child_kind, child, parent_kind, parent) and the series catalog (series_id, entity_kind, entity).
+(child_kind, child, parent_kind, parent) and the series catalog (series_id, entity_kind, entity),
+plus the platform's extra edges from sentinel_lens/topology_extra.py (relationships that are true of
+the platform but missing from the relationships table).
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from typing import Iterable
 import pandas as pd
 
 from sentinel_lens.alerts import Alert
+from sentinel_lens.topology_extra import EXTRA_EDGES
 
 
 # ------------------------------------------------------------------------------------- topology
@@ -56,8 +59,12 @@ class Topology:
         return frozenset(seen)
 
 
-def build_topology(relationships: pd.DataFrame, catalog: pd.DataFrame) -> Topology:
-    """Topology from the relationships table and the series catalog.
+def build_topology(relationships: pd.DataFrame, catalog: pd.DataFrame, extra_edges=EXTRA_EDGES) -> Topology:
+    """Topology from the relationships table and the series catalog, with `extra_edges` merged in.
+
+    extra_edges  rows of (child_kind, child, relation, parent_kind, parent, ...) added to the
+                 relationships. Default: the tracked list in sentinel_lens/topology_extra.py.
+                 Pass () for the relationships exactly as given.
 
     Every relationship row is one undirected edge between "child_kind:child" and
     "parent_kind:parent", whatever the relation is called (consumes, member_of, runs, ...). Pod
@@ -66,8 +73,9 @@ def build_topology(relationships: pd.DataFrame, catalog: pd.DataFrame) -> Topolo
     alerts on the same entity.
     """
     neighbours: dict = {}
-    for ck, c, pk, p in zip(relationships.child_kind, relationships.child, relationships.parent_kind,
-                            relationships.parent):
+    pairs = list(zip(relationships.child_kind, relationships.child, relationships.parent_kind, relationships.parent))
+    pairs += [(e[0], e[1], e[3], e[4]) for e in extra_edges]
+    for ck, c, pk, p in pairs:
         a, b = f"{ck}:{c}", f"{pk}:{p}"
         neighbours.setdefault(a, set()).add(b)
         neighbours.setdefault(b, set()).add(a)

@@ -39,3 +39,53 @@ def test_routed_train_result_with_router_defaults():
 
 def test_routed_train_result_without_metric_overrides_is_unchanged():
     assert train_result(metric_min_change={}) == BASELINE
+
+
+# --- correlator: pages on train with the default topology (the given relationships + the tracked extra edges)
+def train_pages(**topology_settings) -> int:
+    import warnings
+
+    import pandas as pd
+
+    from scripts.score_formulas import current_alerts
+    from scripts.score_seasonal import ds
+    from sentinel_lens.correlator import build_topology, correlate
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        alerts, _ = current_alerts()
+    lo, hi = pd.Timestamp("2026-10-05", tz="UTC"), pd.Timestamp("2026-10-19", tz="UTC")
+    alerts = [a for a in alerts if lo <= a.time < hi]
+    topology = build_topology(ds.relationships(), ds.series(), **topology_settings)
+    return len(correlate(alerts, topology))
+
+
+def test_default_pages_on_train_equal_the_experiments_real_edges_row():
+    # scripts/diagnose_fragmentation.py, row "A1-A6 together": 46 pages; the topology as given: 49
+    assert train_pages() == 46
+    assert train_pages(extra_edges=()) == 49
+
+
+def test_no_alerting_or_catalog_entity_is_left_without_a_relationship():
+    import warnings
+
+    from scripts.score_formulas import current_alerts
+    from scripts.score_seasonal import ds
+    from sentinel_lens.correlator import build_topology
+
+    catalog = ds.series()
+    topology = build_topology(ds.relationships(), catalog)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        alerts, _ = current_alerts()
+    entities = set(catalog.entity_kind + ":" + catalog.entity) | {topology.entity(a.target) for a in alerts}
+    assert sorted(e for e in entities if e not in topology.neighbours) == []
+
+
+def test_extra_edges_do_not_repeat_given_relationships():
+    from scripts.score_seasonal import ds
+    from sentinel_lens.topology_extra import EXTRA_EDGES
+
+    rel = ds.relationships()
+    given = {frozenset([f"{a}:{b}", f"{c}:{d}"]) for a, b, c, d in zip(rel.child_kind, rel.child, rel.parent_kind, rel.parent)}
+    assert not [e for e in EXTRA_EDGES if frozenset([f"{e[0]}:{e[1]}", f"{e[3]}:{e[4]}"]) in given]

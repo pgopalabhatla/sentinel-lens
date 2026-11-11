@@ -24,7 +24,7 @@ CATALOG = pd.DataFrame(
      ("msgs|orders", "topic", "orders"), ("cpu|kafka-0", "pod", "kafka-0"),
      ("cpu|trino-worker-0", "pod", "trino-worker-0"), ("queued|trino", "cluster", "trino")],
     columns=["series_id", "entity_kind", "entity"])
-TOPOLOGY = build_topology(RELATIONSHIPS, CATALOG)
+TOPOLOGY = build_topology(RELATIONSHIPS, CATALOG, extra_edges=())    # the synthetic platform only
 
 
 def alert(minutes, target, detector="seasonal", score=0.7, explanation=None):
@@ -154,3 +154,45 @@ def test_output_is_deterministic_and_ordered():
 
 def test_no_alerts_no_incidents():
     assert correlate([], TOPOLOGY) == []
+
+
+# ------------------------------------------------------------------ the platform's extra edges
+def test_every_extra_edge_is_merged_by_default():
+    from sentinel_lens.topology_extra import EXTRA_EDGES
+    topo = build_topology(RELATIONSHIPS, CATALOG)                      # default: extras merged in
+    assert len(EXTRA_EDGES) == 6
+    for child_kind, child, _, parent_kind, parent, _ in EXTRA_EDGES:
+        a, b = f"{child_kind}:{child}", f"{parent_kind}:{parent}"
+        assert b in topo.neighbours[a] and a in topo.neighbours[b], f"{a} - {b}"
+    # the given relationships are still there
+    assert "consumer_group:orders-etl" in topo.neighbours["pod:consumer-0"]
+
+
+def test_the_named_extra_edges():
+    topo = build_topology(RELATIONSHIPS, CATALOG)
+    for a, b in [("resource_group:adhoc", "cluster:trino-lakehouse"), ("spark_app:orders-stream", "topic:orders"),
+                 ("flink_job:clickstream-enrich", "topic:clicks"), ("dag:daily_orders", "cluster:airflow-main"),
+                 ("dag:customer_agg", "cluster:airflow-main"), ("dag:hourly_quality_check", "cluster:airflow-main")]:
+        assert b in topo.within(a, 1)
+
+
+def test_extra_edges_can_be_switched_off():
+    topo = build_topology(RELATIONSHIPS, CATALOG, extra_edges=())
+    assert "resource_group:adhoc" not in topo.neighbours and "dag:daily_orders" not in topo.neighbours
+
+
+def test_every_extra_edge_has_a_justification_and_is_listed_once():
+    from sentinel_lens.topology_extra import EXTRA_EDGES, edges_frame
+    assert all(len(e) == 6 and len(e[5]) > 20 for e in EXTRA_EDGES)
+    assert len({(e[0], e[1], e[3], e[4]) for e in EXTRA_EDGES}) == len(EXTRA_EDGES)
+    assert list(edges_frame().columns) == ["child_kind", "child", "relation", "parent_kind", "parent"]
+    assert len(edges_frame()) == len(EXTRA_EDGES)
+
+
+def test_extra_edge_links_alerts_that_were_separate():
+    catalog = pd.DataFrame([("queued|adhoc", "resource_group", "adhoc"), ("cpu|trino-worker-0", "pod", "trino-worker-0"),
+                            ("queries|trino-lakehouse", "cluster", "trino-lakehouse")],
+                           columns=["series_id", "entity_kind", "entity"])
+    alerts = [alert(0, "queued|adhoc"), alert(3, "queries|trino-lakehouse")]
+    assert len(correlate(alerts, build_topology(RELATIONSHIPS, catalog, extra_edges=()))) == 2
+    assert len(correlate(alerts, build_topology(RELATIONSHIPS, catalog))) == 1
