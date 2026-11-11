@@ -378,3 +378,21 @@ The detection system is complete for the evaluation: seasonal baseline, persiste
 - Frozen feedback applied to train itself gives 35 pages and 16 false. That is in-sample twice over and is not a result; it only shows the code path works.
 
 Disclosure: On Nov 10, during router investigation, a grep over data/labels printed one test-split row (INC-014: container_cpu_throttled_ratio on orders-etl-consumer-0, direction up). No test values were seen. This happened BEFORE the 0.18 throttling minimum change and the injection test were chosen. 0.18 was justified from warm-up/train distributions and domain reasoning, but the decision to keep throttling detectable instead of suppressing it was informed by knowing a test throttling incident exists. INC-014 is therefore reported separately, and system 5's recall is reported with and without it.
+
+## Nov 11, test week result and post-hoc
+
+The test week was run once, from the frozen code at tag `pre-test-freeze`, after the predictions were committed.
+
+- Pre-registered result, verbatim from the runner: [docs/results/test-week.md](results/test-week.md). This is the only result to quote.
+- Post-hoc analysis, written after the result was seen and marked as such: [docs/results/test-week-posthoc.md](results/test-week-posthoc.md). Read-only; nothing was re-run or re-tuned.
+
+Primary system (final alerts + correlator pages + frozen feedback): 9 of 10 actionable incidents detected (Wilson 95% interval 0.60-0.98), per-alert precision 0.79, 24 pages in 7 days of which 8 false (1.14 a day), no merged incidents, 1.6 pages per labeled incident. Before vs. after feedback: per-alert precision 0.742 to 0.79, false pages 10 to 8, no incident lost to feedback. Against the naive baseline: false alerts 641 to 45, at the price of one incident (INC-015) that the baseline caught and the final system missed. INC-014, the one test label seen beforehand, pages; without it recall is 8 of 9.
+
+Corrections the post-hoc makes to how the pre-registered table reads: the median time to detect of the primary system (10.0 min) was timed on raw alerts while the other systems were timed after the scorer's dedup (13.0 min); on the same footing they are identical, so feedback changed no time to detect. The maximum, 405 min, is the same either way.
+
+Two limitations, found on the test week and NOT fixed on it:
+
+1. Zero-baseline, low-count series. INC-015 (Trino saturation) was missed. Its signal was on `trino_queued_queries`, which sits at 0 and rose by up to 21.8 queries; with the 6-unit minimum change for count-like series only 2 of 9 readings were hot and persistence needs 3 of 5. The same floor is what removed hundreds of false alarms on train, so this is a real trade-off, not a bug.
+2. Slow leaks under the 5% floor. INC-013 (memory leak) was detected after 405 min. The floor means memory must be 30% above expected to be hot; it was 10% above after 55 min. The saturation forecast would not have helped (first alert at 800 min).
+
+Future work: any change aimed at these two is to be designed and evaluated on a second generated world (a dataset with a different incident schedule, since another seed of this one only changes the noise), not on this test week. The test week has been seen; tuning on it now would make its numbers meaningless.
