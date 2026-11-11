@@ -396,3 +396,7 @@ Two limitations, found on the test week and NOT fixed on it:
 2. Slow leaks under the 5% floor. INC-013 (memory leak) was detected after 405 min. The floor means memory must be 30% above expected to be hot; it was 10% above after 55 min. The saturation forecast would not have helped (first alert at 800 min).
 
 Future work: any change aimed at these two is to be designed and evaluated on a second generated world (a dataset with a different incident schedule, since another seed of this one only changes the noise), not on this test week. The test week has been seen; tuning on it now would make its numbers meaningless.
+
+## Nov 11, change point detector (not adopted)
+
+Change point detector (CUSUM on seasonal z, k 0.5, h 10, clip 3): built and tested on train before the test run, not adopted: 517 alerts, 5 true; cause: quiet-period z is wider (sd 1.1-1.6) and autocorrelated (0.2-0.33), unlike the unit-noise assumption. Code and full log entry on the pushed branch `change-point`.
