@@ -444,3 +444,22 @@ Speed (`python scripts/measure_stream.py`, test week, 136 seasonal series, 27 co
 The slow ordinary minutes are those in which a DAG run finishes (the batch job-run rule re-scores the DAG's whole history, about 50 ms).
 
 Limits: one process, state in memory; a restart needs the alert log for pages; each new alert re-groups whole candidate pages, which will get slow for pages with thousands of alerts; the saturation rule (off in the frozen system) has no streaming step and the engine refuses routes that ask for it. Adding files under `sentinel_lens/` makes the runner's "frozen code identical to the tag" flag False for any later run, although no frozen file changed (`git diff pre-test-freeze -- sentinel_lens` shows only the new `stream/` files). The full test suite now takes about 100 s instead of 26 s; the three test-week tests are about 75 s of that.
+
+## Nov 16, streaming engine moved; live timing (post-hoc)
+
+- The streaming engine now lives in a top-level package, `sentinel_stream/` (it was `sentinel_lens/stream/` in the entry above). `sentinel_lens/` is again identical to tag `pre-test-freeze`, and the runner's freeze status reads `frozen_code_identical_to_tag: True, working_tree_clean: True`. Imports only; no behaviour change.
+- The 12 tests that replay the test week are marked `slow` and skipped by default. `pytest`: 199 tests, 28 s. `pytest -m slow`: 12 tests, 73 s. `pytest -m "slow or not slow"`: 211 tests, 110 s.
+- Post-hoc, read-only (`python scripts/posthoc_live_timing.py`; section "Live timing (post-hoc, streaming engine)" in [docs/results/test-week-posthoc.md](results/test-week-posthoc.md#live-timing-post-hoc-streaming-engine)). The pre-registered result is unchanged and still the one to quote; these are the live versions of two of its numbers.
+
+| system 5, test week | pre-registered (batch) | live (streaming engine) |
+|---|---|---|
+| incidents detected | 9 of 10 | 9 of 10, the same ones |
+| median time to detect (min) | 10.0 | 13.0 |
+| maximum time to detect (min) | 405 | 409 |
+| pages sent | 24 | 31 |
+| of which FALSE | 8 | 13 |
+| false pages per day | 1.14 | 1.86 |
+
+- Time: every seasonal alert is known 4 minutes after its batch time (the 5-minute bucket has to finish). 5 of the 9 detected incidents are 4 minutes later, 4 are unchanged (first paged by a counter, a must-be-zero gauge or the schedule watcher). INC-014's -1 min becomes 3 min. No incident changes between detected and missed, also when the scorer matches on the time an alert is known.
+- Pages: 24 of the 31 page-outs are the pre-registered pages with the same verdicts. The other 7 paged and were later absorbed by a merge: 2 TRUE (both the memory leak INC-013) and 5 FALSE (all inside the windows of INC-017 and the expected burst INC-018, on entities those labels do not list).
+- Two of those 5 FALSE page-outs were absorbed in the same minute they paged, because the engine pages alert by alert inside one step. Waiting for the end of the step before paging would give 29 page-outs, 11 FALSE, 1.57 a day. Not changed here: it is a change to the engine's behaviour, to be decided and tested on its own, not slipped into a post-hoc analysis.

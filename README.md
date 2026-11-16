@@ -180,6 +180,13 @@ same way the systems are identical for every incident: 13.0 by the scorer's timi
 alerts. Feedback changed no time to detect. Source: test-week.md for the two medians,
 test-week-posthoc.md section c for the like-for-like comparison.
 
+**Correction (Nov 16): live timing.** The times and page counts above are batch numbers. Replayed one
+minute at a time through the streaming engine, the same alerts fire but are known later: system 5's time
+to detect is median 13.0 min and maximum 409 min (pre-registered: 10.0 and 405), and the engineer is paged
+31 times, 13 of them false, which is 1.86 false pages per day (pre-registered: 1.14, from the 24 pages left
+at the end of the week; 1.57 if a page that merges in the minute it pages is not counted). No incident
+changes between detected and missed. Post-hoc: [Live timing](docs/results/test-week-posthoc.md#live-timing-post-hoc-streaming-engine).
+
 **Predictions against the result.**
 
 | Predicted before the run | Result |
