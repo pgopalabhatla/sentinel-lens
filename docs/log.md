@@ -400,3 +400,7 @@ Future work: any change aimed at these two is to be designed and evaluated on a 
 ## Nov 11, change point detector (not adopted)
 
 Change point detector (CUSUM on seasonal z, k 0.5, h 10, clip 3): built and tested on train before the test run, not adopted: 517 alerts, 5 true; cause: quiet-period z is wider (sd 1.1-1.6) and autocorrelated (0.2-0.33), unlike the unit-noise assumption. Code and full log entry on the pushed branch `change-point`.
+
+## Nov 16, write-up
+
+README rewritten, design doc added, old README moved to docs/dataset.md, three exploration scripts removed (`look_graph.py`, `plot_baseline.py`, `plot_lag.py`; nothing imported them, history keeps them).
