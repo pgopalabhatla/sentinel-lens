@@ -404,3 +404,43 @@ Change point detector (CUSUM on seasonal z, k 0.5, h 10, clip 3): built and test
 ## Nov 16, write-up
 
 README rewritten, design doc added, old README moved to docs/dataset.md, three exploration scripts removed (`look_graph.py`, `plot_baseline.py`, `plot_lag.py`; nothing imported them, history keeps them).
+
+## Nov 16, streaming engine
+
+New package `sentinel_lens/stream/` (branch `streaming-engine`): the final system, one minute at a time, in one process. No Kafka yet. No existing detector, router, correlator, feedback or frozen-config file was touched; the runner's dry run still reproduces the train numbers.
+
+Input: one minute of metric values at a time (`on_minute`) plus DAG-run start and finish events (`on_run_event`), e.g. from `DataSource.stream()` (`sentinel_lens/stream/replay.py`). Output: `AlertEvent` for each alert as it fires and `PageEvent` (opened / alert_added / merged / paged). `StreamEngine.warm_start(ds, at)` builds the state from history and reads nothing at or after `at`.
+
+How it stays equal to batch: no formula is written twice. Each step calls the batch function on the smallest input that holds its answer.
+
+| step | batch code it calls | state it keeps |
+|---|---|---|
+| seasonal | `seasonal._history` once a day per series (the baseline of a reading only uses earlier days, so the next 24 hours of baselines can be built ahead); then `robust_z` per 5-minute bucket; `alerts_from_seasonal` for 3-of-5 | 28 days of 5-minute means; the last 5 scored buckets |
+| guardrails | `counter_increase_alerts` on [previous, current], `above_zero_alerts` on [current] | the previous reading of each counter |
+| schedule | `schedule_alerts` once per deadline with `now` = the deadline; `failed_run_alerts` when a run finishes | known runs; a timer per deadline |
+| job run baseline | `job_run_alerts` on the DAG's finished runs when a run finishes | finished runs per DAG |
+| pages | `correlate` on the new alert plus every page within 15 minutes of it; `feedback.group_key` for the frozen demotions | open pages; which have paged |
+
+Tests (`tests/test_stream_steps.py` on synthetic data, `tests/test_stream_test_week.py` on the test week; no labels read, nothing tuned):
+
+1. Equivalence: the test week streamed through the engine, warm-started on Sep 28 - Oct 18, gives the same 1,445 alerts as `final_alerts()` in `scripts/run_test_week.py` (time, target, detector, direction, score, and also explanation, measure, line), the same 26 pages, the same 244 demoted alerts and the same 24 paging pages with the same paging times. Nothing differed.
+2. Causality: an engine given the stream only up to a cut (Oct 19 06:52, Oct 20 02:07, Oct 20 16:20) emits exactly the events the full run had emitted by then, and its pages are the batch pages of the alerts it has seen.
+3. Restart: stopped at Oct 20 02:07 (mid-bucket, the leak's page open with 321 alerts, the nightly job running), a new engine built from history and continued to the end of the week gives the same events as the uninterrupted run. Detector state comes back from the DataSource; pages are rebuilt from the alerts already emitted (an alert is not in the metric history, so the alert log has to be kept).
+
+Two things the streaming run shows that the batch numbers hide. Neither is changed here; both are about the frozen result's times, not about which alerts fire.
+
+- A seasonal alert's time is the START of its 5-minute bucket, because that is how `query(step="5min")` labels a mean. The bucket is complete 4 minutes later. So every seasonal alert is known 4 minutes after the time batch gives it (1,322 of the 1,445 alerts; the test asserts exactly 4 minutes for seasonal and 0 for the other 123). Of the 24 paging pages, 14 are paged 4 minutes after their batch paging time and 10 at the same time. Any time to detect in docs/results/test-week.md that rests on a seasonal alert is therefore 4 minutes better than a live system could do. My reading: this is also why INC-014 shows -1 min there (an alert stamped 16:15 built from minutes up to 16:19, against a start of 16:16).
+- Batch counts pages at the end of the week. Live, a page that has already paged can later be joined to another by a new alert: 5 merges absorbed 7 pages that had already paged. The engine pages 31 times for what ends as 24 pages.
+
+Speed (`python scripts/measure_stream.py`, test week, 136 seasonal series, 27 counters, 1 must-be-zero gauge): warm start 1.1 s; 2.84 ms per simulated minute on average (about 21,000x real time).
+
+| minutes | n | mean ms | median ms | p95 ms | max ms |
+|---|---|---|---|---|---|
+| all | 10080 | 2.84 | 0.42 | 4.51 | 960 |
+| ordinary | 8064 | 1.88 | 0.41 | 1.64 | 90 |
+| closes a 5-minute bucket | 2009 | 3.48 | 3.03 | 7.51 | 18 |
+| builds the next day's baselines | 7 | 926 | 920 | 958 | 960 |
+
+The slow ordinary minutes are those in which a DAG run finishes (the batch job-run rule re-scores the DAG's whole history, about 50 ms).
+
+Limits: one process, state in memory; a restart needs the alert log for pages; each new alert re-groups whole candidate pages, which will get slow for pages with thousands of alerts; the saturation rule (off in the frozen system) has no streaming step and the engine refuses routes that ask for it. Adding files under `sentinel_lens/` makes the runner's "frozen code identical to the tag" flag False for any later run, although no frozen file changed (`git diff pre-test-freeze -- sentinel_lens` shows only the new `stream/` files). The full test suite now takes about 100 s instead of 26 s; the three test-week tests are about 75 s of that.
