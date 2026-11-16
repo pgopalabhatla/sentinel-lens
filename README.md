@@ -255,8 +255,17 @@ pip install -r requirements-dev.txt        # pandas, numpy, scipy, pyyaml, matpl
 export PYTHONPATH=.
 
 python -m sentinel_sim.generate --out data --seed 7   # create the dataset (about 20 s; data/ is not in git)
-pytest                                                # 190 tests; a few need data/ and are skipped without it
+pytest                                                # 199 tests, about 30 s; a few need data/ and are skipped without it
 python examples/quickstart.py                         # tour of the replay API + the naive baseline on the test week
+```
+
+Tests. The default `pytest` run skips the tests marked `slow`: 12 tests that replay the whole test
+week through the streaming engine (`sentinel_stream/`) and compare it with the batch pipeline.
+
+```bash
+pytest                          # default: 199 tests, about 30 s
+pytest -m slow                  # only the slow ones: 12 tests, about 75 s (needs data/)
+pytest -m "slow or not slow"    # everything: 211 tests, about 110 s
 ```
 
 Reproducing the numbers:

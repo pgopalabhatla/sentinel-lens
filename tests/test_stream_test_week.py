@@ -10,7 +10,8 @@ pass: the difference is the finding.
                 had emitted by then.
 3. Restart      stop mid-week, rebuild the state from history, continue: same output as never stopping.
 
-Needs the dataset in data/ (not in git); skipped when it is missing. Takes about a minute.
+Needs the dataset in data/ (not in git); skipped when it is missing. Marked slow (about 75 s): the
+default `pytest` run skips this file, `pytest -m slow` runs it.
 """
 from pathlib import Path
 
@@ -22,7 +23,8 @@ from sentinel_lens.correlator import build_topology, correlate
 from sentinel_stream import FROZEN_DEMOTED_GROUPS, AlertEvent, PageEvent, StreamEngine, replay
 
 DATA = Path(__file__).resolve().parents[1] / "data"
-pytestmark = [pytest.mark.skipif(not (DATA / "metrics").exists(), reason="dataset not generated"),
+pytestmark = [pytest.mark.slow,
+              pytest.mark.skipif(not (DATA / "metrics").exists(), reason="dataset not generated"),
               pytest.mark.filterwarnings("ignore::RuntimeWarning")]
 
 # The frozen result (docs/results/test-week.md): raw alerts in the window, alerts demoted by the frozen
