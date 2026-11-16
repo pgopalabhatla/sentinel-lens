@@ -187,3 +187,173 @@ Predicted ordering on false volume, 5 <= 4 < 3 < 2 < 1 (systems 1-3 count alerts
 
 POST-HOC. Nothing here replaces docs/results/test-week.md, and nothing was changed or re-tuned.
 ```
+
+## Live timing (post-hoc, streaming engine)
+
+Added on 2026-11-16, also AFTER the pre-registered result was seen. It comes from
+`python scripts/posthoc_live_timing.py`, a read-only script on branch `streaming-engine`. No detector, router,
+correlator, feedback or config code was changed, nothing was re-tuned and the frozen runner was not run again.
+The script rebuilds the same alerts and pages with the frozen runner's own functions, checks that they reproduce
+the pre-registered system 5 numbers, and checks that the streaming engine (`sentinel_stream/`) gives the same
+1,445 alerts, 26 pages and 244 demoted alerts, before printing anything. Test-week labels are read; that is
+allowed only because the evaluation is over. `docs/results/test-week.md` is unchanged.
+
+What is new here is not which alerts fire but WHEN they are known. The pre-registered times are batch times.
+The streaming engine takes the week one minute at a time and records when it could first know each thing.
+
+**a. Time to detect, by the time the engine could know.**
+- Batch stamps a seasonal alert with the start of its 5-minute bucket. The bucket is complete 4 minutes later.
+  All 1,322 seasonal alerts are known exactly 4 minutes after their batch time; the other 123 (counters,
+  must-be-zero, schedule, job runs) at their batch time.
+- System 5, actionable incidents: median time to detect 13.0 min live against 10.0 pre-registered; maximum
+  409 min against 405.
+- Per incident: 5 of the 9 detected incidents are 4 minutes later (INC-013, INC-014, INC-019, INC-020, INC-022)
+  and 4 are unchanged, because their first page comes from an alert that is not seasonal: a counter, a
+  must-be-zero gauge or the schedule watcher (INC-016, INC-017, INC-021, INC-023).
+- INC-014 goes from -1 min to 3 min. The -1 was an alert stamped 16:15 that was built from the minutes
+  16:15-16:19, against a labeled start of 16:16; live it is known at 16:19.
+- No incident changes between detected and missed: 9 of 10 either way, INC-015 missed either way. This also
+  holds when the scorer matches alerts to incidents on the time they are known instead of their batch time
+  (19 of the 1,445 alerts then match a different set of incidents; no incident's status moves), and every
+  first page comes before its incident's end.
+
+**b. Live paging.**
+- The pre-registered 24 pages are the pages that exist at the end of the week. Live, the engineer is paged
+  whenever a page gets its first alert that is not demoted, and two pages that have both paged can later be
+  joined by a new alert. The engine pages 31 times.
+- With the runner's rule (a page is TRUE if it holds an alert the scorer classes 'true'): 17 TRUE, 1 expected,
+  13 FALSE. Live false pages per day: 1.86, against 1.14 pre-registered (8 false pages).
+- 24 of the 31 are exactly the pre-registered pages, with the same verdicts (15 TRUE, 1 expected, 8 FALSE).
+  The other 7 were absorbed into another page after paging: 2 TRUE and 5 FALSE.
+  - TRUE: two more pages for the memory leak INC-013 (flink-taskmanager-0 after 358 min on its own,
+    flink-taskmanager-1 after 39 min), each joined to the leak's first page by a Flink job restart.
+  - FALSE: trino-worker-0 on Oct 22 17:49, and orders-etl-consumer-1, kafka-1, kafka-2 and kafka-0 on Oct 22
+    19:14-19:19. All five fall inside the windows of labeled incidents (INC-017 and the expected traffic burst
+    INC-018) on entities those labels do not list, which is the scorer's entity rule again.
+- Caveat on the 31: two of the five FALSE ones (trino-worker-0 and orders-etl-consumer-1) were absorbed in the
+  same minute they paged, because the engine pages alert by alert and the linking alert came in the same
+  step. A pager that waits for the end of the step would send 29 page-outs, 11 FALSE: 1.57 a day. The engine
+  was not changed for this analysis; 31 and 1.86 are what it does today.
+- Judged by the alerts a page held at the moment it paged (usually one), 15 are TRUE and 16 FALSE: two pages
+  that end TRUE and the expected one started with alerts the scorer classes false.
+
+### Script output, verbatim (live timing)
+
+```
+POST-HOC, not the pre-registered result. Written after docs/results/test-week.md was seen; read-only.
+
+Batch side reproduces the pre-registered system 5 numbers {'recall': '9 of 10', 'median_ttd_min': 10.0, 'max_ttd_min': 405.0, 'pages': 24, 'FALSE_pages': 8, 'false_pages_per_day': 1.14}: True
+Streaming engine: same 1445 alerts, same 26 pages, same 244 demoted alerts as batch: True
+
+==============================================================================================================
+a. Time to detect, system 5: when the engine could know (emission time) vs. the batch time
+==============================================================================================================
+Emission time - alert time: 1322 seasonal alerts, all [4.0] min; 123 other alerts, all [0.0] min.
+Batch: an incident is detected by a paging page that holds a matching alert, timed at the later of the page's
+paging time and that alert's time (alert times as batch stamps them). Live: the first stream time at which a page
+that has paged holds a matching alert, following the pages as they actually were at each moment. Same alerts,
+same matching to incidents as the pre-registered run.
+
+                              scenario  actionable  batch_ttd_min  live_ttd_min  later_by_min live_first_page_at incident_end paged_before_incident_end
+incident_id                                                                                                                                            
+INC-013                    memory_leak        True          405.0         409.0           4.0        10-19 06:49  10-20 08:00                      True
+INC-014             kafka_consumer_lag        True           -1.0           3.0           4.0        10-20 16:19  10-21 00:40                      True
+INC-015               trino_saturation        True                                                                10-20 21:35                          
+INC-016             spark_executor_oom        True           13.0          13.0           0.0        10-21 02:17  10-21 02:37                      True
+INC-017           crashloop_bad_config        True            0.0           0.0           0.0        10-22 17:30  10-22 18:40                      True
+INC-018                  traffic_burst       False           10.0          14.0           4.0        10-22 19:14  10-22 20:50                      True
+INC-019                spark_data_skew        True           30.6          34.6           4.0        10-23 02:39  10-23 02:54                      True
+INC-020                scheduler_stall        True           10.0          14.0           4.0        10-23 13:09  10-23 14:20                      True
+INC-021            dag_late_or_missing        True           70.0          70.0           0.0        10-24 03:30  10-24 04:44                      True
+INC-022      flink_checkpoint_failures        True            0.0           4.0           4.0        10-24 04:14  10-24 05:25                      True
+INC-023             broker_gc_pressure        True            7.0           7.0           0.0        10-25 12:52  10-25 15:10                      True
+
+Over the actionable incidents:
+                   system 5 detected  median_ttd_min  max_ttd_min
+batch time (pre-registered)  9 of 10            10.0        405.0
+       live (emission time)  9 of 10            13.0        409.0
+
+Detected / missed, three ways (the last two columns are the alert level, before pages and feedback):
+                              scenario  actionable  batch_detected_(5)  live_detected_(5)  live_detected_(5)_matching_on_emission_time  alerts_(3)_detected_batch  alerts_(3)_detected_matching_on_emission_time
+incident_id                                                                                                                                                                                                     
+INC-013                    memory_leak        True                True               True                                         True                       True                                           True
+INC-014             kafka_consumer_lag        True                True               True                                         True                       True                                           True
+INC-015               trino_saturation        True               False              False                                        False                      False                                          False
+INC-016             spark_executor_oom        True                True               True                                         True                       True                                           True
+INC-017           crashloop_bad_config        True                True               True                                         True                       True                                           True
+INC-018                  traffic_burst       False                True               True                                         True                       True                                           True
+INC-019                spark_data_skew        True                True               True                                         True                       True                                           True
+INC-020                scheduler_stall        True                True               True                                         True                       True                                           True
+INC-021            dag_late_or_missing        True                True               True                                         True                       True                                           True
+INC-022      flink_checkpoint_failures        True                True               True                                         True                       True                                           True
+INC-023             broker_gc_pressure        True                True               True                                         True                       True                                           True
+
+Incidents whose detected/missed status changes: none
+Alerts whose set of matched incidents changes when matched on emission time: 19 of 1445
+
+==============================================================================================================
+b. Live paging: every page-out, classed with the runner's rule
+==============================================================================================================
+A page-out is a 'paged' event: a page gets its first alert that is not demoted. Verdict = the runner's rule
+(TRUE if the page holds an alert the scorer classes 'true', else expected, else FALSE), applied to the page's
+own alerts at the end of its life: at the end of the week, or at the moment it was absorbed into another page.
+'verdict_at_page_out' applies the same rule to the alerts the page held when it paged.
+
+ n    paged_at page_first_alert        entity_of_first_alert  alerts_at_page_out  alerts_at_end verdict_at_page_out  verdict labeled_incidents                                  fate
+ 1 10-19 06:49      10-19 06:45      pod:flink-taskmanager-1                   1            401                TRUE     TRUE           INC-013           kept to the end of the week
+ 2 10-19 10:39      10-19 10:35      pod:flink-taskmanager-0                   1              4                TRUE     TRUE           INC-013           kept to the end of the week
+ 3 10-19 11:24      10-19 11:20      pod:flink-taskmanager-0                   1             72                TRUE     TRUE           INC-013  absorbed 10-19 17:22 into page-out 1
+ 4 10-19 20:10      10-19 20:10     dag:hourly_quality_check                   1              1               FALSE    FALSE                             kept to the end of the week
+ 5 10-19 21:24      10-19 21:20      spark_app:orders-stream                   1              3               FALSE    FALSE                             kept to the end of the week
+ 6 10-20 00:09      10-20 00:09     dag:hourly_quality_check                   1              1               FALSE    FALSE                             kept to the end of the week
+ 7 10-20 03:14      10-20 03:10      pod:flink-taskmanager-1                   1              8                TRUE     TRUE           INC-013  absorbed 10-20 03:53 into page-out 1
+ 8 10-20 15:14      10-20 15:10    pod:orders-etl-consumer-0                   2            337               FALSE     TRUE           INC-014           kept to the end of the week
+ 9 10-20 21:19      10-20 21:10           pod:trino-worker-0                   3             12               FALSE    FALSE                             kept to the end of the week
+10 10-20 21:19      10-20 21:10           pod:trino-worker-1                   3             17               FALSE    FALSE                             kept to the end of the week
+11 10-21 02:17      10-21 02:17      pod:daily-orders-exec-2                   1              5                TRUE     TRUE           INC-016           kept to the end of the week
+12 10-21 02:37      10-21 02:37             dag:daily_orders                   1              1                TRUE     TRUE           INC-016           kept to the end of the week
+13 10-21 11:29      10-21 11:25         pod:airflow-worker-0                   1              6               FALSE    FALSE                             kept to the end of the week
+14 10-22 17:30      10-22 17:30           pod:trino-worker-1                   1             77                TRUE     TRUE           INC-017           kept to the end of the week
+15 10-22 17:49      10-22 17:45           pod:trino-worker-0                   1              1               FALSE    FALSE                   absorbed 10-22 17:49 into page-out 14
+16 10-22 19:14      10-22 19:10    pod:orders-etl-consumer-0                   2            180               FALSE expected           INC-018           kept to the end of the week
+17 10-22 19:14      10-22 19:10    pod:orders-etl-consumer-1                   2              2               FALSE    FALSE                   absorbed 10-22 19:14 into page-out 16
+18 10-22 19:14      10-22 19:10                  pod:kafka-1                   1              5               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 16
+19 10-22 19:14      10-22 19:10                  pod:kafka-2                   1              3               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 16
+20 10-22 19:19      10-22 19:15                  pod:kafka-0                   2              4               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 16
+21 10-22 22:10      10-22 22:10     dag:hourly_quality_check                   1              1               FALSE    FALSE                             kept to the end of the week
+22 10-23 02:34      10-23 02:30      pod:daily-orders-exec-1                   1             18               FALSE     TRUE           INC-019           kept to the end of the week
+23 10-23 02:39      10-23 02:35      pod:daily-orders-exec-2                   1             22                TRUE     TRUE           INC-019           kept to the end of the week
+24 10-23 02:54      10-23 02:35      pod:daily-orders-exec-3                   4             12                TRUE     TRUE           INC-019           kept to the end of the week
+25 10-23 02:54      10-23 02:54             dag:daily_orders                   1              1                TRUE     TRUE           INC-019           kept to the end of the week
+26 10-23 13:09      10-23 13:05         cluster:airflow-main                   1             33                TRUE     TRUE           INC-020           kept to the end of the week
+27 10-24 03:24      10-24 03:20         pod:airflow-worker-0                   1              3               FALSE    FALSE                             kept to the end of the week
+28 10-24 03:30      10-24 03:30             dag:daily_orders                   1              1                TRUE     TRUE           INC-021           kept to the end of the week
+29 10-24 04:14      10-24 04:10 flink_job:clickstream-enrich                   1             95                TRUE     TRUE           INC-022           kept to the end of the week
+30 10-24 04:44      10-24 04:44             dag:daily_orders                   1              1                TRUE     TRUE           INC-021           kept to the end of the week
+31 10-25 12:52      10-25 12:52         cluster:kafka-ingest                   1            205                TRUE     TRUE           INC-023           kept to the end of the week
+
+Summary:
+                                             pages  TRUE  expected  FALSE  false_pages_per_day
+           batch, system 5 (pre-registered)     24    15         1      8                 1.14
+                             live page-outs     31    17         1     13                 1.86
+       of which kept to the end of the week     24    15         1      8                 1.14
+  of which absorbed by a merge after paging      7     2         0      5                 0.71
+The page-outs kept to the end are exactly the 24 batch paging pages: True
+By the alerts held at the moment of paging instead: TRUE 15, expected 0, FALSE 16.
+
+The page-outs that were later absorbed by a merge:
+ n    paged_at     entity_of_first_alert  own_alerts verdict labeled_incidents absorbed_at  minutes_on_its_own                                      into_page                                                 linking_alert
+ 3 10-19 11:24   pod:flink-taskmanager-0          72    TRUE           INC-013 10-19 17:22               358.0   2026-10-19T06:45:00Z|pod:flink-taskmanager-1    flink_job_restarts_total|clickstream-enrich [counter_rule]
+ 7 10-20 03:14   pod:flink-taskmanager-1           8    TRUE           INC-013 10-20 03:53                39.0   2026-10-19T06:45:00Z|pod:flink-taskmanager-1    flink_job_restarts_total|clickstream-enrich [counter_rule]
+15 10-22 17:49        pod:trino-worker-0           1   FALSE                   10-22 17:49                 0.0        2026-10-22T17:30:00Z|pod:trino-worker-1       trino_query_p95_sec|trino-lakehouse [seasonal fallback]
+17 10-22 19:14 pod:orders-etl-consumer-1           2   FALSE                   10-22 19:14                 0.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_consumer_records_consumed_per_sec|orders-etl [seasonal]
+18 10-22 19:14               pod:kafka-1           5   FALSE                   10-22 19:24                10.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
+19 10-22 19:14               pod:kafka-2           3   FALSE                   10-22 19:24                10.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
+20 10-22 19:19               pod:kafka-0           4   FALSE                   10-22 19:24                 5.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
+
+2 of them (n = 15, 17) were absorbed in the same minute they paged: the linking alert was emitted in the same engine
+step, and the engine pages alert by alert. A pager that waits for the end of the step would send 29 page-outs,
+11 of them FALSE: 1.57 false pages per day.
+
+POST-HOC. Nothing here replaces docs/results/test-week.md, and nothing was changed or re-tuned.
+```
