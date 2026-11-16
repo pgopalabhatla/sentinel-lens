@@ -463,3 +463,22 @@ Limits: one process, state in memory; a restart needs the alert log for pages; e
 - Time: every seasonal alert is known 4 minutes after its batch time (the 5-minute bucket has to finish). 5 of the 9 detected incidents are 4 minutes later, 4 are unchanged (first paged by a counter, a must-be-zero gauge or the schedule watcher). INC-014's -1 min becomes 3 min. No incident changes between detected and missed, also when the scorer matches on the time an alert is known.
 - Pages: 24 of the 31 page-outs are the pre-registered pages with the same verdicts. The other 7 paged and were later absorbed by a merge: 2 TRUE (both the memory leak INC-013) and 5 FALSE (all inside the windows of INC-017 and the expected burst INC-018, on entities those labels do not list).
 - Two of those 5 FALSE page-outs were absorbed in the same minute they paged, because the engine pages alert by alert inside one step. Waiting for the end of the step before paging would give 29 page-outs, 11 FALSE, 1.57 a day. Not changed here: it is a change to the engine's behaviour, to be decided and tested on its own, not slipped into a post-hoc analysis.
+
+## Nov 16, paging once per step
+
+Decision: the streaming engine decides paging once per step, after all alerts of that minute have been grouped into pages, instead of alert by alert (`Pager.add` only groups; `Pager.settle` pages; `sentinel_stream/pages.py`).
+
+Reason: one minute often brings several alerts of the same problem. Taken one by one, two of them can open two pages, page for both, and be merged by a third a moment later, all inside the same engine step. That sends two pages for what is one page before anyone could have read the first. Nothing about which alerts fire or how they are grouped changes: the alerts and the final pages are still identical to batch (the equivalence, causality and restart tests pass unchanged), and time to detect is unchanged (the step's pages are sent at the same stream time).
+
+| live, system 5, test week | alert by alert (before) | once per step (now) | pre-registered (batch) |
+|---|---|---|---|
+| pages sent | 31 | 29 | 24 |
+| TRUE / expected / FALSE | 17 / 1 / 13 | 17 / 1 / 11 | 15 / 1 / 8 |
+| false pages per day | 1.86 | 1.57 | 1.14 |
+| absorbed by a merge after paging | 7 (2 TRUE, 5 FALSE) | 5 (2 TRUE, 3 FALSE) | - |
+| median / maximum time to detect (min) | 13.0 / 409 | 13.0 / 409 | 10.0 / 405 |
+
+- The two page-outs that disappear are trino-worker-0 (Oct 22 17:49) and orders-etl-consumer-1 (Oct 22 19:14), both FALSE, both absorbed in the minute they paged.
+- The 5 that remain were on their own for 5 to 358 minutes before a later alert joined them to another page; an engineer would have been paged for each. Waiting longer before paging would remove some of them at the price of time to detect. Not explored.
+- Honest order of events: this change was prompted by the post-hoc analysis of the test week (the entry above). It is justified by the argument, not by the number, and 1.57 is a description of the engine as it is now, not a test of the change. The pre-registered result (24 pages, 8 false, 1.14 a day) is untouched and is still the one to quote.
+- The post-hoc section "Live timing (post-hoc, streaming engine)" and the README correction now carry the once-per-step numbers; the section says what its first version reported. A unit test covers the rule on a synthetic case (three alerts that end in one page: one page-out in one step, two when spread over three steps), and the pinned test-week count is now 29 page-outs, 5 absorbed.

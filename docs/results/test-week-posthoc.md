@@ -201,6 +201,13 @@ allowed only because the evaluation is over. `docs/results/test-week.md` is unch
 What is new here is not which alerts fire but WHEN they are known. The pre-registered times are batch times.
 The streaming engine takes the week one minute at a time and records when it could first know each thing.
 
+Revision, same day: the first version of this section reported 31 page-outs, 13 FALSE, 1.86 false pages a day.
+The engine then decided paging alert by alert, and two of those page-outs were pages that opened, paged and
+merged into another page inside one minute. The engine now decides paging once per step, after all alerts of
+the minute have been grouped, and the numbers below are from that engine: 29, 11, 1.57. Section a is identical
+in both versions. The change was prompted by this analysis of the test week, so 1.57 describes the engine as it
+is now; it is not independent evidence that the change is right.
+
 **a. Time to detect, by the time the engine could know.**
 - Batch stamps a seasonal alert with the start of its 5-minute bucket. The bucket is complete 4 minutes later.
   All 1,322 seasonal alerts are known exactly 4 minutes after their batch time; the other 123 (counters,
@@ -219,23 +226,22 @@ The streaming engine takes the week one minute at a time and records when it cou
 
 **b. Live paging.**
 - The pre-registered 24 pages are the pages that exist at the end of the week. Live, the engineer is paged
-  whenever a page gets its first alert that is not demoted, and two pages that have both paged can later be
-  joined by a new alert. The engine pages 31 times.
+  when a page first holds an alert that is not demoted (decided at the end of each step), and two pages that
+  have both paged can later be joined by a new alert. The engine pages 29 times.
 - With the runner's rule (a page is TRUE if it holds an alert the scorer classes 'true'): 17 TRUE, 1 expected,
-  13 FALSE. Live false pages per day: 1.86, against 1.14 pre-registered (8 false pages).
-- 24 of the 31 are exactly the pre-registered pages, with the same verdicts (15 TRUE, 1 expected, 8 FALSE).
-  The other 7 were absorbed into another page after paging: 2 TRUE and 5 FALSE.
+  11 FALSE. Live false pages per day: 1.57, against 1.14 pre-registered (8 false pages).
+- 24 of the 29 are exactly the pre-registered pages, with the same verdicts (15 TRUE, 1 expected, 8 FALSE).
+  The other 5 were absorbed into another page after paging: 2 TRUE and 3 FALSE.
   - TRUE: two more pages for the memory leak INC-013 (flink-taskmanager-0 after 358 min on its own,
     flink-taskmanager-1 after 39 min), each joined to the leak's first page by a Flink job restart.
-  - FALSE: trino-worker-0 on Oct 22 17:49, and orders-etl-consumer-1, kafka-1, kafka-2 and kafka-0 on Oct 22
-    19:14-19:19. All five fall inside the windows of labeled incidents (INC-017 and the expected traffic burst
-    INC-018) on entities those labels do not list, which is the scorer's entity rule again.
-- Caveat on the 31: two of the five FALSE ones (trino-worker-0 and orders-etl-consumer-1) were absorbed in the
-  same minute they paged, because the engine pages alert by alert and the linking alert came in the same
-  step. A pager that waits for the end of the step would send 29 page-outs, 11 FALSE: 1.57 a day. The engine
-  was not changed for this analysis; 31 and 1.86 are what it does today.
-- Judged by the alerts a page held at the moment it paged (usually one), 15 are TRUE and 16 FALSE: two pages
-  that end TRUE and the expected one started with alerts the scorer classes false.
+  - FALSE: kafka-1, kafka-2 and kafka-0 on Oct 22 19:14-19:19, joined 5-10 minutes later to the page of the
+    expected traffic burst INC-018. They fall inside that incident's window on entities its label does not
+    list, which is the scorer's entity rule again.
+- The two page-outs that are gone since the first version (trino-worker-0 on Oct 22 17:49 and
+  orders-etl-consumer-1 on Oct 22 19:14, both FALSE) now join their page inside the step and never page on
+  their own. No page-out is absorbed in the minute it pages any more.
+- Judged by the alerts a page held at the moment it paged, 15 are TRUE, 1 expected and 13 FALSE: two pages
+  that end TRUE (INC-014, INC-019) started with alerts the scorer classes false.
 
 ### Script output, verbatim (live timing)
 
@@ -294,7 +300,8 @@ Alerts whose set of matched incidents changes when matched on emission time: 19 
 ==============================================================================================================
 b. Live paging: every page-out, classed with the runner's rule
 ==============================================================================================================
-A page-out is a 'paged' event: a page gets its first alert that is not demoted. Verdict = the runner's rule
+A page-out is a 'paged' event: at the end of an engine step (all alerts of that minute grouped) a page holds an
+alert that is not demoted and has not paged before. Verdict = the runner's rule
 (TRUE if the page holds an alert the scorer classes 'true', else expected, else FALSE), applied to the page's
 own alerts at the end of its life: at the end of the week, or at the moment it was absorbed into another page.
 'verdict_at_page_out' applies the same rule to the alerts the page held when it paged.
@@ -309,51 +316,46 @@ own alerts at the end of its life: at the end of the week, or at the moment it w
  7 10-20 03:14      10-20 03:10      pod:flink-taskmanager-1                   1              8                TRUE     TRUE           INC-013  absorbed 10-20 03:53 into page-out 1
  8 10-20 15:14      10-20 15:10    pod:orders-etl-consumer-0                   2            337               FALSE     TRUE           INC-014           kept to the end of the week
  9 10-20 21:19      10-20 21:10           pod:trino-worker-0                   3             12               FALSE    FALSE                             kept to the end of the week
-10 10-20 21:19      10-20 21:10           pod:trino-worker-1                   3             17               FALSE    FALSE                             kept to the end of the week
+10 10-20 21:19      10-20 21:10           pod:trino-worker-1                   4             17               FALSE    FALSE                             kept to the end of the week
 11 10-21 02:17      10-21 02:17      pod:daily-orders-exec-2                   1              5                TRUE     TRUE           INC-016           kept to the end of the week
 12 10-21 02:37      10-21 02:37             dag:daily_orders                   1              1                TRUE     TRUE           INC-016           kept to the end of the week
 13 10-21 11:29      10-21 11:25         pod:airflow-worker-0                   1              6               FALSE    FALSE                             kept to the end of the week
 14 10-22 17:30      10-22 17:30           pod:trino-worker-1                   1             77                TRUE     TRUE           INC-017           kept to the end of the week
-15 10-22 17:49      10-22 17:45           pod:trino-worker-0                   1              1               FALSE    FALSE                   absorbed 10-22 17:49 into page-out 14
-16 10-22 19:14      10-22 19:10    pod:orders-etl-consumer-0                   2            180               FALSE expected           INC-018           kept to the end of the week
-17 10-22 19:14      10-22 19:10    pod:orders-etl-consumer-1                   2              2               FALSE    FALSE                   absorbed 10-22 19:14 into page-out 16
-18 10-22 19:14      10-22 19:10                  pod:kafka-1                   1              5               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 16
-19 10-22 19:14      10-22 19:10                  pod:kafka-2                   1              3               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 16
-20 10-22 19:19      10-22 19:15                  pod:kafka-0                   2              4               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 16
-21 10-22 22:10      10-22 22:10     dag:hourly_quality_check                   1              1               FALSE    FALSE                             kept to the end of the week
-22 10-23 02:34      10-23 02:30      pod:daily-orders-exec-1                   1             18               FALSE     TRUE           INC-019           kept to the end of the week
-23 10-23 02:39      10-23 02:35      pod:daily-orders-exec-2                   1             22                TRUE     TRUE           INC-019           kept to the end of the week
-24 10-23 02:54      10-23 02:35      pod:daily-orders-exec-3                   4             12                TRUE     TRUE           INC-019           kept to the end of the week
-25 10-23 02:54      10-23 02:54             dag:daily_orders                   1              1                TRUE     TRUE           INC-019           kept to the end of the week
-26 10-23 13:09      10-23 13:05         cluster:airflow-main                   1             33                TRUE     TRUE           INC-020           kept to the end of the week
-27 10-24 03:24      10-24 03:20         pod:airflow-worker-0                   1              3               FALSE    FALSE                             kept to the end of the week
-28 10-24 03:30      10-24 03:30             dag:daily_orders                   1              1                TRUE     TRUE           INC-021           kept to the end of the week
-29 10-24 04:14      10-24 04:10 flink_job:clickstream-enrich                   1             95                TRUE     TRUE           INC-022           kept to the end of the week
-30 10-24 04:44      10-24 04:44             dag:daily_orders                   1              1                TRUE     TRUE           INC-021           kept to the end of the week
-31 10-25 12:52      10-25 12:52         cluster:kafka-ingest                   1            205                TRUE     TRUE           INC-023           kept to the end of the week
+15 10-22 19:14      10-22 19:10    pod:orders-etl-consumer-0                   8            180            expected expected           INC-018           kept to the end of the week
+16 10-22 19:14      10-22 19:10                  pod:kafka-1                   1              5               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 15
+17 10-22 19:14      10-22 19:10                  pod:kafka-2                   1              3               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 15
+18 10-22 19:19      10-22 19:15                  pod:kafka-0                   2              4               FALSE    FALSE                   absorbed 10-22 19:24 into page-out 15
+19 10-22 22:10      10-22 22:10     dag:hourly_quality_check                   1              1               FALSE    FALSE                             kept to the end of the week
+20 10-23 02:34      10-23 02:30      pod:daily-orders-exec-1                   1             18               FALSE     TRUE           INC-019           kept to the end of the week
+21 10-23 02:39      10-23 02:35      pod:daily-orders-exec-2                   1             22                TRUE     TRUE           INC-019           kept to the end of the week
+22 10-23 02:54      10-23 02:35      pod:daily-orders-exec-3                   6             12                TRUE     TRUE           INC-019           kept to the end of the week
+23 10-23 02:54      10-23 02:54             dag:daily_orders                   1              1                TRUE     TRUE           INC-019           kept to the end of the week
+24 10-23 13:09      10-23 13:05         cluster:airflow-main                   1             33                TRUE     TRUE           INC-020           kept to the end of the week
+25 10-24 03:24      10-24 03:20         pod:airflow-worker-0                   1              3               FALSE    FALSE                             kept to the end of the week
+26 10-24 03:30      10-24 03:30             dag:daily_orders                   1              1                TRUE     TRUE           INC-021           kept to the end of the week
+27 10-24 04:14      10-24 04:10 flink_job:clickstream-enrich                   1             95                TRUE     TRUE           INC-022           kept to the end of the week
+28 10-24 04:44      10-24 04:44             dag:daily_orders                   1              1                TRUE     TRUE           INC-021           kept to the end of the week
+29 10-25 12:52      10-25 12:52         cluster:kafka-ingest                   1            205                TRUE     TRUE           INC-023           kept to the end of the week
 
 Summary:
                                              pages  TRUE  expected  FALSE  false_pages_per_day
            batch, system 5 (pre-registered)     24    15         1      8                 1.14
-                             live page-outs     31    17         1     13                 1.86
+                             live page-outs     29    17         1     11                 1.57
        of which kept to the end of the week     24    15         1      8                 1.14
-  of which absorbed by a merge after paging      7     2         0      5                 0.71
+  of which absorbed by a merge after paging      5     2         0      3                 0.43
 The page-outs kept to the end are exactly the 24 batch paging pages: True
-By the alerts held at the moment of paging instead: TRUE 15, expected 0, FALSE 16.
+By the alerts held at the moment of paging instead: TRUE 15, expected 1, FALSE 13.
 
 The page-outs that were later absorbed by a merge:
- n    paged_at     entity_of_first_alert  own_alerts verdict labeled_incidents absorbed_at  minutes_on_its_own                                      into_page                                                 linking_alert
- 3 10-19 11:24   pod:flink-taskmanager-0          72    TRUE           INC-013 10-19 17:22               358.0   2026-10-19T06:45:00Z|pod:flink-taskmanager-1    flink_job_restarts_total|clickstream-enrich [counter_rule]
- 7 10-20 03:14   pod:flink-taskmanager-1           8    TRUE           INC-013 10-20 03:53                39.0   2026-10-19T06:45:00Z|pod:flink-taskmanager-1    flink_job_restarts_total|clickstream-enrich [counter_rule]
-15 10-22 17:49        pod:trino-worker-0           1   FALSE                   10-22 17:49                 0.0        2026-10-22T17:30:00Z|pod:trino-worker-1       trino_query_p95_sec|trino-lakehouse [seasonal fallback]
-17 10-22 19:14 pod:orders-etl-consumer-1           2   FALSE                   10-22 19:14                 0.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_consumer_records_consumed_per_sec|orders-etl [seasonal]
-18 10-22 19:14               pod:kafka-1           5   FALSE                   10-22 19:24                10.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
-19 10-22 19:14               pod:kafka-2           3   FALSE                   10-22 19:24                10.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
-20 10-22 19:19               pod:kafka-0           4   FALSE                   10-22 19:24                 5.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
+ n    paged_at   entity_of_first_alert  own_alerts verdict labeled_incidents absorbed_at  minutes_on_its_own                                      into_page                                                 linking_alert
+ 3 10-19 11:24 pod:flink-taskmanager-0          72    TRUE           INC-013 10-19 17:22               358.0   2026-10-19T06:45:00Z|pod:flink-taskmanager-1    flink_job_restarts_total|clickstream-enrich [counter_rule]
+ 7 10-20 03:14 pod:flink-taskmanager-1           8    TRUE           INC-013 10-20 03:53                39.0   2026-10-19T06:45:00Z|pod:flink-taskmanager-1    flink_job_restarts_total|clickstream-enrich [counter_rule]
+16 10-22 19:14             pod:kafka-1           5   FALSE                   10-22 19:24                10.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
+17 10-22 19:14             pod:kafka-2           3   FALSE                   10-22 19:24                10.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
+18 10-22 19:19             pod:kafka-0           4   FALSE                   10-22 19:24                 5.0 2026-10-22T19:10:00Z|pod:orders-etl-consumer-0 kafka_produce_request_p99_ms|kafka-ingest [seasonal fallback]
 
-2 of them (n = 15, 17) were absorbed in the same minute they paged: the linking alert was emitted in the same engine
-step, and the engine pages alert by alert. A pager that waits for the end of the step would send 29 page-outs,
-11 of them FALSE: 1.57 false pages per day.
+Page-outs absorbed in the same minute they paged: 0 (paging is decided once per step, so a page that opens and
+merges inside one step never pages on its own).
 
 POST-HOC. Nothing here replaces docs/results/test-week.md, and nothing was changed or re-tuned.
 ```

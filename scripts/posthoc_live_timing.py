@@ -14,8 +14,9 @@ batch pipeline (tests/test_stream_test_week.py). What differs is WHEN things are
 a. Time to detect. Batch stamps a seasonal alert with the start of its 5-minute bucket; the engine
    can only know it when the bucket is complete, 4 minutes later.
 b. Paging. Batch counts the pages that exist at the end of the week. Live, the engineer is paged
-   whenever a page gets its first alert that is not demoted, and two pages that have both paged can
-   later be merged into one.
+   when a page first holds an alert that is not demoted (decided once per engine step, after all of
+   that minute's alerts have been grouped), and two pages that have both paged can later be merged
+   into one.
 """
 import warnings
 from dataclasses import replace
@@ -181,7 +182,8 @@ def main():
     heading("b. Live paging: every page-out, classed with the runner's rule")
     outs = page_outs(events)
     final_by_key = {k: p for k, p in engine.pager._pages.items()}
-    print("A page-out is a 'paged' event: a page gets its first alert that is not demoted. Verdict = the runner's rule\n"
+    print("A page-out is a 'paged' event: at the end of an engine step (all alerts of that minute grouped) a page holds an\n"
+          "alert that is not demoted and has not paged before. Verdict = the runner's rule\n"
           "(TRUE if the page holds an alert the scorer classes 'true', else expected, else FALSE), applied to the page's\n"
           "own alerts at the end of its life: at the end of the week, or at the moment it was absorbed into another page.\n"
           "'verdict_at_page_out' applies the same rule to the alerts the page held when it paged.\n")
@@ -242,11 +244,8 @@ def main():
     print(pd.DataFrame(rows).to_string(index=False))
 
     same_step = [r for r in rows if r["minutes_on_its_own"] == 0]
-    n_false_same_step = sum(r["verdict"] == "FALSE" for r in same_step)
-    n_out, n_false = len(out_table) - len(same_step), int(counts.get("FALSE", 0)) - n_false_same_step
-    print(f"\n{len(same_step)} of them (n = {', '.join(str(r['n']) for r in same_step)}) were absorbed in the same minute they paged: "
-          "the linking alert was emitted in the same engine\nstep, and the engine pages alert by alert. A pager that waits "
-          f"for the end of the step would send {n_out} page-outs,\n{n_false} of them FALSE: {round(n_false / days, 2)} false pages per day.")
+    print(f"\nPage-outs absorbed in the same minute they paged: {len(same_step)} (paging is decided once per step, so a page that "
+          "opens and\nmerges inside one step never pages on its own).")
 
     print("\nPOST-HOC. Nothing here replaces docs/results/test-week.md, and nothing was changed or re-tuned.")
 

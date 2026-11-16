@@ -183,9 +183,8 @@ test-week-posthoc.md section c for the like-for-like comparison.
 **Correction (Nov 16): live timing.** The times and page counts above are batch numbers. Replayed one
 minute at a time through the streaming engine, the same alerts fire but are known later: system 5's time
 to detect is median 13.0 min and maximum 409 min (pre-registered: 10.0 and 405), and the engineer is paged
-31 times, 13 of them false, which is 1.86 false pages per day (pre-registered: 1.14, from the 24 pages left
-at the end of the week; 1.57 if a page that merges in the minute it pages is not counted). No incident
-changes between detected and missed. Post-hoc: [Live timing](docs/results/test-week-posthoc.md#live-timing-post-hoc-streaming-engine).
+29 times, 11 of them false, which is 1.57 false pages per day (pre-registered: 1.14, from the 24 pages left
+at the end of the week). No incident changes between detected and missed. Post-hoc: [Live timing](docs/results/test-week-posthoc.md#live-timing-post-hoc-streaming-engine).
 
 **Predictions against the result.**
 
@@ -262,7 +261,7 @@ pip install -r requirements-dev.txt        # pandas, numpy, scipy, pyyaml, matpl
 export PYTHONPATH=.
 
 python -m sentinel_sim.generate --out data --seed 7   # create the dataset (about 20 s; data/ is not in git)
-pytest                                                # 199 tests, about 30 s; a few need data/ and are skipped without it
+pytest                                                # 200 tests, about 30 s; a few need data/ and are skipped without it
 python examples/quickstart.py                         # tour of the replay API + the naive baseline on the test week
 ```
 
@@ -270,9 +269,9 @@ Tests. The default `pytest` run skips the tests marked `slow`: 12 tests that rep
 week through the streaming engine (`sentinel_stream/`) and compare it with the batch pipeline.
 
 ```bash
-pytest                          # default: 199 tests, about 30 s
+pytest                          # default: 200 tests, about 30 s
 pytest -m slow                  # only the slow ones: 12 tests, about 75 s (needs data/)
-pytest -m "slow or not slow"    # everything: 211 tests, about 110 s
+pytest -m "slow or not slow"    # everything: 212 tests, about 110 s
 ```
 
 Reproducing the numbers:
