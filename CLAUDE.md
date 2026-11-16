@@ -68,4 +68,5 @@ Metrics: incident recall, alert precision (before and after feedback), median ti
 
 ## Pointers
 - `docs/scope-v3.md`: what's in and out
-- `README.md`: dataset, replay API and scoring details
+- `README.md`: project overview, how it works and the test-week results
+- `docs/dataset.md`: dataset, replay API and scoring details
