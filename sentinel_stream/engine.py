@@ -6,7 +6,8 @@
     engine.advance(now)                                        # let deadlines before `now` fire
 
 Inputs must arrive in time order. At one timestamp the order is: run events, then deadlines, then
-the minute of metrics. After everything before a time `c` has been fed and `advance(c)` called, the
+the minute of metrics. A STEP is everything one call emits at one stream time: all alerts of the step
+are grouped into pages first, and only then is it decided which pages page (see pages.py). After everything before a time `c` has been fed and `advance(c)` called, the
 engine has emitted exactly what it can know at clock `c` (the same convention as `DataSource.at(c)`:
 readings stamped before `c` are in, `c` itself is not).
 
@@ -95,8 +96,11 @@ class StreamEngine:
                      expected_runs=lambda start, end: ds.at(end).expected_runs(start=start, end=end),
                      demoted_groups=demoted_groups, step=step)
         engine._load(view, at, None if history_start is None else utc(history_start))
-        for event in alert_log:
+        alert_log = list(alert_log)
+        for n, event in enumerate(alert_log):                 # replay the log step by step
             engine.pager.add(event.alert, event.emitted_at)
+            if n + 1 == len(alert_log) or alert_log[n + 1].emitted_at != event.emitted_at:
+                engine.pager.settle(event.emitted_at)
         return engine
 
     def _load(self, view, at: pd.Timestamp, history_start) -> None:
@@ -141,7 +145,7 @@ class StreamEngine:
         series_id. Series the engine watches that are missing from it count as no reading (NaN)."""
         ts = utc(ts)
         self._check_order(ts)
-        out = self._deadlines(ts, inclusive=True)
+        due = self.runs.due(ts, inclusive=True)
         row = self._vector(values)
         n_s, n_c = len(self.seasonal.series_ids), len(self.guardrails.counter_ids)
         alerts = self.guardrails.step(ts, row[n_s:n_s + n_c], row[n_s + n_c:])
@@ -156,12 +160,12 @@ class StreamEngine:
         if ts + SAMPLE_EVERY >= bucket + self.step:           # that was the bucket's last minute
             alerts += self._close_bucket()
         self.now = ts + SAMPLE_EVERY
-        return out + self._emit(alerts, ts)
+        return self._emit(due + [(ts, alerts)])
 
     def on_run_event(self, event) -> list:
         """A RunStarted or RunFinished, at the time it happened."""
         self._check_order(event.time)
-        out = self._deadlines(event.time, inclusive=False)
+        due = self.runs.due(event.time, inclusive=False)
         if isinstance(event, RunStarted):
             alerts = self.runs.started(event)
         elif isinstance(event, RunFinished):
@@ -169,13 +173,13 @@ class StreamEngine:
         else:
             raise TypeError(f"not a run event: {event!r}")
         self.now = max(self.now, event.time) if self.now is not None else event.time
-        return out + self._emit(alerts, event.time)
+        return self._emit(due + [(event.time, alerts)])
 
     def advance(self, now) -> list:
         """Nothing new arrived, but time passed: fire the deadlines before `now`."""
         now = utc(now)
         self._check_order(now)
-        out = self._deadlines(now, inclusive=False)
+        out = self._emit(self.runs.due(now, inclusive=False))
         self.now = now
         return out
 
@@ -207,17 +211,21 @@ class StreamEngine:
         self._bucket_start, self._bucket_ts, self._bucket_rows = start + self.step, [], []
         return self.seasonal.score(start, means) if n else []
 
-    def _deadlines(self, now, inclusive: bool) -> list:
+    def _emit(self, timed_alerts) -> list:
+        """[(stream time, alerts)] in time order -> output events. Alerts with the same stream time
+        are one step: each is grouped into a page, then paging is decided once for the step."""
+        steps: list = []
+        for emitted_at, alerts in timed_alerts:
+            if steps and steps[-1][0] == emitted_at:
+                steps[-1][1].extend(alerts)
+            else:
+                steps.append((emitted_at, list(alerts)))
         out = []
-        for deadline, alerts in self.runs.due(now, inclusive):
-            out += self._emit(alerts, deadline)
-        return out
-
-    def _emit(self, alerts, emitted_at) -> list:
-        out = []
-        for alert in sorted(alerts, key=_order):
-            out.append(AlertEvent(emitted_at, alert, self.pager.is_demoted(alert)))
-            out += self.pager.add(alert, emitted_at)
+        for emitted_at, alerts in steps:
+            for alert in sorted(alerts, key=_order):
+                out.append(AlertEvent(emitted_at, alert, self.pager.is_demoted(alert)))
+                out += self.pager.add(alert, emitted_at)
+            out += self.pager.settle(emitted_at)
         return out
 
     # --------------------------------------------------------------------------------- views

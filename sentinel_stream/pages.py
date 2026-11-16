@@ -14,7 +14,14 @@ Alerts do not arrive in time order: a seasonal alert about 16:15 arrives at 16:1
 alert about 16:17. `correlate` does not care about order, so pages end up the same as in batch.
 
 Feedback: an alert whose group (`feedback.group_key`) is in the frozen demoted set is demoted. It
-joins its page, but a page pages only when it gets its first alert that is not demoted.
+joins its page, but a page pages only when it holds an alert that is not demoted.
+
+Paging is decided once per step, not once per alert. One minute often brings several alerts of the
+same problem (a pod, its consumer group and its topic in the same 5-minute bucket). Taken one by one
+they would open two pages, page for both, and merge them a moment later, all inside the same minute:
+two pages sent for what is one page before anyone could have read the first. So `add` only groups,
+and `settle`, called after all alerts of the step are in, pages for every page that holds an alert
+that is not demoted and has not paged yet.
 
 Cost note: each new alert re-groups the whole candidate pages, so a page with thousands of alerts
 gets slow. Fine for this dataset; a larger one would only need the alerts inside the gap.
@@ -45,12 +52,14 @@ class Pager:
         self._pages: dict = {}            # key -> Incident (the batch correlator's own record)
         self._paged_at: dict = {}         # key -> when the engine paged for it
         self._next_key = 1
+        self._touched: set = set()        # pages changed since the last settle()
         self.demoted: set = set()         # the alerts that are demoted
 
     def is_demoted(self, alert: Alert) -> bool:
         return bool(self.demoted_groups) and feedback.group_key(alert, self.canonical_event_of) in self.demoted_groups
 
     def add(self, alert: Alert, emitted_at: pd.Timestamp) -> list[PageEvent]:
+        """Group one alert: it opens a page, joins one, or merges several. Never pages; see `settle`."""
         if self.is_demoted(alert):
             self.demoted.add(alert)
         candidates = [k for k, p in self._pages.items()
@@ -71,12 +80,22 @@ class Pager:
         for k in absorbed:
             del self._pages[k]
         self._pages[key] = page
-        events = [PageEvent(kind, emitted_at, key, page.id, alert, len(page.alerts), absorbed)]
+        self._touched = (self._touched - set(absorbed)) | {key}
         if paged_before:
             self._paged_at[key] = min(paged_before)
-        elif feedback.pages(page, self.demoted):
-            self._paged_at[key] = emitted_at
-            events.append(PageEvent("paged", emitted_at, key, page.id, alert, len(page.alerts)))
+        return [PageEvent(kind, emitted_at, key, page.id, alert, len(page.alerts), absorbed)]
+
+    def settle(self, emitted_at: pd.Timestamp) -> list[PageEvent]:
+        """End of a step: page for every page changed in it that holds an alert that is not demoted
+        and has not paged before. The event carries the page's earliest such alert."""
+        events = []
+        for key in sorted(self._touched):
+            page = self._pages[key]
+            if key not in self._paged_at and feedback.pages(page, self.demoted):
+                self._paged_at[key] = emitted_at
+                first = next(a for a in page.alerts if a not in self.demoted)
+                events.append(PageEvent("paged", emitted_at, key, page.id, first, len(page.alerts)))
+        self._touched.clear()
         return events
 
     # --------------------------------------------------------------------------------- views

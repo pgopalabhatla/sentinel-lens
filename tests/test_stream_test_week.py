@@ -217,7 +217,8 @@ def test_restart_mid_week_continues_as_if_never_stopped(cut_runs, full, world):
 def test_live_pages_outnumber_final_pages_by_the_ones_merged_after_paging(full):
     """Batch counts pages at the end of the week (24 that page). Live, a page that has already paged
     can later be joined to another one by a new alert. The engineer was paged for both, so the engine
-    pages 31 times for what ends up as 24 pages."""
+    pages 29 times for what ends up as 24 pages. (It was 31 while paging was decided alert by alert;
+    since paging is decided once per step, two pages that merged in the minute they opened count once.)"""
     engine, events = full
     paged = {}
     absorbed_after_paging = 0
@@ -227,4 +228,4 @@ def test_live_pages_outnumber_final_pages_by_the_ones_merged_after_paging(full):
         if isinstance(e, PageEvent) and e.kind == "merged":
             absorbed_after_paging += sum(k in paged for k in e.absorbed if e.page in paged)
     assert len(paged) - absorbed_after_paging == len(engine.paging_pages()) == FROZEN_RESULT["paging_pages"]
-    assert (len(paged), absorbed_after_paging) == (31, 7)
+    assert (len(paged), absorbed_after_paging) == (29, 5)

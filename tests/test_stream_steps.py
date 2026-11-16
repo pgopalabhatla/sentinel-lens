@@ -218,7 +218,7 @@ def test_pager_gives_the_batch_pages_after_every_alert_whatever_the_arrival_orde
     seen = []
     events = []
     for arrived, _, alert in arrivals:
-        events += pager.add(alert, arrived)
+        events += pager.add(alert, arrived) + pager.settle(arrived)       # one alert per step
         seen.append(alert)
         assert pager.pages() == correlate(seen, topology)
     kinds = [e.kind for e in events]
@@ -238,11 +238,15 @@ def test_pager_pages_only_when_an_alert_that_is_not_demoted_arrives():
         return Alert(time=t0 + pd.Timedelta(minutes=minute), target=target, detector="seasonal", score=0.6,
                      direction="up", explanation="x", measure=7.0, line=6.0)
 
-    first = pager.add(alert(0, "m|a"), t0)                                  # demoted: a page, nobody paged
+    def step(a, at):
+        return pager.add(a, at) + pager.settle(at)
+
+    first = step(alert(0, "m|a"), t0)                                       # demoted: a page, nobody paged
     assert [e.kind for e in first] == ["opened"]
-    second = pager.add(alert(5, "m|b"), t0 + pd.Timedelta(minutes=9))       # related and not demoted: pages now
+    second = step(alert(5, "m|b"), t0 + pd.Timedelta(minutes=9))            # related and not demoted: pages now
     assert [e.kind for e in second] == ["alert_added", "paged"]
-    third = pager.add(alert(10, "m|b"), t0 + pd.Timedelta(minutes=14))      # already paged: no second page
+    assert second[-1].alert == alert(5, "m|b")                              # the page's first alert that is not demoted
+    third = step(alert(10, "m|b"), t0 + pd.Timedelta(minutes=14))           # already paged: no second page
     assert [e.kind for e in third] == ["alert_added"]
 
     page, = pager.pages()
@@ -250,6 +254,32 @@ def test_pager_pages_only_when_an_alert_that_is_not_demoted_arrives():
     assert pager.demoted == set(demoted)
     assert feedback.paging_time(page, demoted) == t0 + pd.Timedelta(minutes=5)      # the alert's own time ...
     assert pager.paged_at() == {page.id: t0 + pd.Timedelta(minutes=9)}              # ... and when it arrived
+
+
+def test_pager_pages_once_for_a_step_whose_alerts_end_up_in_one_page():
+    """a and c are two hops apart, so their alerts open two pages; b, between them, joins the two.
+    When all three arrive in the same step that is one page-out, not two followed by a merge."""
+    topology = small_topology()
+    t0 = ts("2026-01-01 10:00")
+
+    def alert(target):
+        return Alert(time=t0, target=target, detector="seasonal", score=0.6, direction="up",
+                     explanation="x", measure=7.0, line=6.0)
+
+    together = Pager(topology)
+    events = [e for target in ("m|a", "m|c", "m|b") for e in together.add(alert(target), t0)]
+    events += together.settle(t0)
+    assert [e.kind for e in events] == ["opened", "opened", "merged", "paged"]
+    assert len(together.pages()) == 1
+
+    # the same three alerts in three steps: both pages page before the third alert joins them
+    apart = Pager(topology)
+    events = []
+    for minute, target in enumerate(("m|a", "m|c", "m|b")):
+        at = t0 + pd.Timedelta(minutes=minute)
+        events += apart.add(alert(target), at) + apart.settle(at)
+    assert [e.kind for e in events] == ["opened", "paged", "opened", "paged", "merged"]
+    assert apart.pages() == together.pages()                   # the pages are the same either way
 
 
 def test_frozen_demoted_groups_are_the_ones_in_the_frozen_config():

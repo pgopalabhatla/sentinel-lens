@@ -62,7 +62,9 @@ class PageEvent:
     opened        a new page, started by `alert`
     alert_added   `alert` joined an existing page
     merged        `alert` linked two or more pages; `absorbed` are the keys that no longer exist
-    paged         the page got its first alert that is not demoted: an engineer is paged now
+    paged         an engineer is paged now: at the end of a step the page holds an alert that is not
+                  demoted and has not paged before. Decided once per step, after all of the step's
+                  alerts have been grouped; `alert` is the page's earliest alert that is not demoted
 
     `page` is the engine's own key for the page and never changes while the page lives (a merge keeps
     the oldest key). `page_id` is the batch correlator's id ("<first alert time>|<its entity>"); it
