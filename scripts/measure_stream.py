@@ -3,7 +3,7 @@
     source .venv/bin/activate && export PYTHONPATH=.
     python scripts/measure_stream.py
 
-Replays the test week through sentinel_lens.stream, warm-started on everything before it, and times
+Replays the test week through sentinel_stream, warm-started on everything before it, and times
 each simulated minute (the minute of metrics plus the DAG-run events and deadlines that fall in it).
 Reads no labels and scores nothing; the output of the run is checked against the batch pipeline in
 tests/test_stream_test_week.py, not here.
@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.run_test_week import DATA, HISTORY_START, SPLITS
-from sentinel_lens.stream import AlertEvent, PageEvent, StreamEngine, run_events
+from sentinel_stream import AlertEvent, PageEvent, StreamEngine, run_events
 from sentinel_sim.replay import DataSource
 
 

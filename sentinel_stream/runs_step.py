@@ -24,7 +24,7 @@ import pandas as pd
 from sentinel_lens.alerts import Alert, alerts_from_job_runs, alerts_from_schedule
 from sentinel_lens.detectors.job_runs import job_run_alerts
 from sentinel_lens.detectors.schedule import DEFAULT_GRACE_MIN, failed_run_alerts, schedule_alerts
-from sentinel_lens.stream.events import RunFinished, RunStarted, utc
+from sentinel_stream.events import RunFinished, RunStarted, utc
 
 RUN_COLUMNS = ["dag_id", "run_id", "run_type", "scheduled_for", "start", "end", "state"]
 FETCH_AHEAD = pd.Timedelta("1D")

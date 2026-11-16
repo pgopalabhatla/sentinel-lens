@@ -28,7 +28,7 @@ import pandas as pd
 from sentinel_lens import feedback
 from sentinel_lens.alerts import Alert
 from sentinel_lens.correlator import Incident, Topology, correlate
-from sentinel_lens.stream.events import PageEvent
+from sentinel_stream.events import PageEvent
 
 _CORRELATE = {k: v.default for k, v in inspect.signature(correlate).parameters.items()
               if v.default is not inspect.Parameter.empty}                    # gap_min 15, max_hops 1

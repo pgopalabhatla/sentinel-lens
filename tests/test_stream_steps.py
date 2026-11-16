@@ -19,11 +19,11 @@ from sentinel_lens.detectors.guardrails import above_zero_alerts, counter_increa
 from sentinel_lens.detectors.job_runs import job_run_alerts
 from sentinel_lens.detectors.schedule import failed_run_alerts, schedule_alerts
 from sentinel_lens.detectors.seasonal import HISTORY_MODES, seasonal_scores
-from sentinel_lens.stream import FROZEN_DEMOTED_GROUPS, RunFinished, RunStarted
-from sentinel_lens.stream.guardrail_step import GuardrailStep
-from sentinel_lens.stream.pages import Pager
-from sentinel_lens.stream.runs_step import RunsStep
-from sentinel_lens.stream.seasonal_step import PERSIST, SeasonalStep
+from sentinel_stream import FROZEN_DEMOTED_GROUPS, RunFinished, RunStarted
+from sentinel_stream.guardrail_step import GuardrailStep
+from sentinel_stream.pages import Pager
+from sentinel_stream.runs_step import RunsStep
+from sentinel_stream.seasonal_step import PERSIST, SeasonalStep
 from tests.helpers import STEPS_PER_DAY, weekly_series
 
 ROOT = Path(__file__).resolve().parents[1]

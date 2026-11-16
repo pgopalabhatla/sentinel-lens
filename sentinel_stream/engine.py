@@ -27,11 +27,11 @@ import pandas as pd
 
 from sentinel_lens import router
 from sentinel_lens.correlator import Topology, build_topology
-from sentinel_lens.stream.events import AlertEvent, RunFinished, RunStarted, utc
-from sentinel_lens.stream.guardrail_step import GuardrailStep
-from sentinel_lens.stream.pages import Pager
-from sentinel_lens.stream.runs_step import RunsStep
-from sentinel_lens.stream.seasonal_step import PERSIST, SeasonalStep
+from sentinel_stream.events import AlertEvent, RunFinished, RunStarted, utc
+from sentinel_stream.guardrail_step import GuardrailStep
+from sentinel_stream.pages import Pager
+from sentinel_stream.runs_step import RunsStep
+from sentinel_stream.seasonal_step import PERSIST, SeasonalStep
 
 # The feedback state frozen at the end of train (docs/config-frozen.md, "Demoted groups carried into
 # the test week"). It is configuration here: the engine never reads labels. A test checks it against

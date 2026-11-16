@@ -19,7 +19,7 @@ import pytest
 
 from sentinel_lens import feedback
 from sentinel_lens.correlator import build_topology, correlate
-from sentinel_lens.stream import FROZEN_DEMOTED_GROUPS, AlertEvent, PageEvent, StreamEngine, replay
+from sentinel_stream import FROZEN_DEMOTED_GROUPS, AlertEvent, PageEvent, StreamEngine, replay
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 pytestmark = [pytest.mark.skipif(not (DATA / "metrics").exists(), reason="dataset not generated"),

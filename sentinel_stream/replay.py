@@ -11,8 +11,8 @@ from typing import Iterator
 
 import pandas as pd
 
-from sentinel_lens.stream.engine import StreamEngine
-from sentinel_lens.stream.events import RunFinished, RunStarted, utc
+from sentinel_stream.engine import StreamEngine
+from sentinel_stream.events import RunFinished, RunStarted, utc
 
 
 def run_events(ds, start, end, history_start=None) -> list:
