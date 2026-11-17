@@ -15,6 +15,12 @@ The triage side (context_tools, investigator, dispatcher, mcp_server) is held to
 nothing it loads is on the injection side or names those topics, its settings cannot name them, and
 through the broker the dispatcher reads only telemetry, alerts, pages and triage and writes only triage.
 `triage_score` reads the answer key to evaluate the notes, so it is on the injection side.
+
+The attacker (sentinel_stream/attacker.py) is held to the opposite: it is on the injection side and must
+be blind to the detection side. Statically: its source and settings name none of alerts, pages, triage,
+the answer key or the engine; it imports nothing from the detection or triage side; its settings and CLI
+can name no topic but `control`. Through the broker (`kafka`): in live mode its only Kafka calls write
+to `control`, and it creates no consumer at all, so it reads no topic.
 """
 import dataclasses
 import re
@@ -254,6 +260,89 @@ def test_through_the_broker_the_dispatcher_touches_only_its_four_topics(monkeypa
         assert {t for method, t in calls if method == "produce"} == {topic["triage"]}
         assert not [c for c in calls if c[0] == "subscribe"]
         assert len(broker.read_topic(bootstrap, topic["triage"])) == 4                  # 3 notes and 1 link
+    finally:
+        monkeypatch.undo()
+        from confluent_kafka.admin import AdminClient
+        existing = AdminClient(broker.client_config(bootstrap)).list_topics(timeout=10).topics
+        broker.delete_topics(bootstrap, [t for t in existing if t.startswith(prefix)])
+
+
+# ------------------------------------------------------------------------------------ the attacker
+ATTACKER_FORBIDDEN = re.compile(r"\balerts?\b|\bpages?\b|\btriage\b|answer[_\- ]?key|StreamEngine|warm_start|labels/", re.IGNORECASE)
+DETECTION_AND_TRIAGE = {"sentinel_stream.consumer", "sentinel_stream.context_tools", "sentinel_stream.dispatcher",
+                        "sentinel_stream.investigator", "sentinel_stream.live_score", "sentinel_stream.triage_score",
+                        "sentinel_stream.mcp_server", "sentinel_stream.engine"}
+
+
+def test_the_attacker_names_and_imports_nothing_of_the_detection_or_triage_side():
+    import ast
+    files = [ROOT / "sentinel_stream/attacker.py", ROOT / "sentinel_stream/attacker.yaml"]
+    hits = [f"{p.name}:{n}: {line.strip()}" for p in files for n, line in enumerate(p.read_text().splitlines(), 1)
+            if ATTACKER_FORBIDDEN.search(line)]
+    assert not hits, "\n".join(hits)
+    tree = ast.parse((ROOT / "sentinel_stream/attacker.py").read_text())
+    imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module} | \
+               {f"{n.module}.{a.name}" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module for a in n.names} | \
+               {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert not imported & DETECTION_AND_TRIAGE, sorted(imported & DETECTION_AND_TRIAGE)
+    # nothing it loads (its imports, the broker, and the replay API it reads history through) is on those sides,
+    # except the engine's code, which the sentinel_stream package itself imports; the attacker never builds one
+    loaded = set(loaded_modules(["sentinel_stream.attacker", "sentinel_sim.replay"]))
+    assert not loaded & (DETECTION_AND_TRIAGE - {"sentinel_stream.engine"}), sorted(loaded & DETECTION_AND_TRIAGE)
+
+
+def test_the_attacker_can_only_be_given_the_control_topic():
+    from sentinel_stream import attacker
+    fields = {f.name for f in dataclasses.fields(attacker.Config)} | {f.name for f in dataclasses.fields(attacker.Budget)}
+    assert not [f for f in fields if re.search(r"topic|alert|page|triage|answer", f)]
+    for flag in ("--alerts-topic", "--pages-topic", "--triage-topic", "--answer-key-topic", "--telemetry-topic"):
+        with pytest.raises(SystemExit):
+            attacker.main(["live", "--data", "x", "--start", "2026-10-26", flag, "x"])
+    assert [d["name"] for d in attacker.definitions()] == ["list_platform", "describe_normal", "list_scenarios", "inject_scenario",
+                                                           "inject_effects", "list_active", "stop"]
+
+
+@pytest.mark.kafka
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_through_the_broker_the_attacker_writes_to_control_only_and_reads_nothing(monkeypatch):
+    confluent_kafka = pytest.importorskip("confluent_kafka")
+    from sentinel_sim.replay import DataSource
+    from sentinel_stream import attacker as A
+    from sentinel_stream import broker, injector
+    from tests.test_triage import FakeLLM, text, tool_use
+
+    if not (ROOT / "data" / "metrics").exists():
+        pytest.skip("dataset not generated")
+    if not broker.reachable(broker.DEFAULT_BOOTSTRAP):
+        pytest.skip(f"no Kafka broker at {broker.DEFAULT_BOOTSTRAP} (start one: docker compose up -d)")
+    bootstrap = broker.DEFAULT_BOOTSTRAP
+    prefix = f"test-{uuid.uuid4().hex[:8]}-"
+    topic = {k: prefix + k for k in ("telemetry", "control", "answer_key", "alerts", "pages", "triage")}
+    calls, consumers = [], []
+    try:
+        broker.ensure_topics(bootstrap, list(topic.values()))                    # every other topic exists and could be read
+
+        class SpyConsumer(confluent_kafka.Consumer):
+            def __init__(self, conf):
+                consumers.append(conf)
+                super().__init__(conf)
+
+        class SpyProducer(confluent_kafka.Producer):
+            def produce(self, t, *args, **kwargs):
+                calls.append(t)
+                return super().produce(t, *args, **kwargs)
+
+        monkeypatch.setattr(confluent_kafka, "Consumer", SpyConsumer)
+        monkeypatch.setattr(confluent_kafka, "Producer", SpyProducer)
+        monkeypatch.setattr(broker, "Consumer", SpyConsumer)
+        cfg = A.Config(model="fake", effort=None, wake_every_minutes=60)
+        att = A.Attacker(DataSource(ROOT / "data"), cfg, send=lambda cmd: injector.send(bootstrap, topic["control"], [cmd]))
+        llm = FakeLLM([[tool_use("inject_scenario", {"scenario": "trino_heavy_query", "intent": "a heavy query",
+                                                     "severity": "noticeable"}, "a")], [text("one")], [text("none")]])
+        A.run_live(att, A.Agent(att, create=llm), "2026-10-07 05:00", speed=1e9, end="2026-10-07 07:00", sleep=lambda s: None)
+        assert set(calls) == {topic["control"]} and len(calls) == 1 and consumers == []
+        sent = broker.read_topic(bootstrap, topic["control"])
+        assert sent == att.commands and sent[0]["id"] == "atk-001"
     finally:
         monkeypatch.undo()
         from confluent_kafka.admin import AdminClient

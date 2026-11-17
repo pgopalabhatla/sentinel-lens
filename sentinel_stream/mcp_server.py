@@ -12,6 +12,13 @@ One server is one page, as it was when it paged: `--page` is the page's number o
 (its first page-out is used; a page pages at most once). The server reads the three topics once at
 start-up and then answers from memory; it is read-only.
 
+A second, separate tool group serves the attacker's tools (sentinel_stream/attacker.py):
+
+    python -m sentinel_stream.mcp_server --group attacker --data data_live --now 2026-10-26T06:00:00Z
+
+It is a different server process with only those seven tools; the triage group never loads the
+attacker's code and the attacker group never builds a page's context.
+
 Built on the low-level `Server` of the official `mcp` SDK rather than its decorator API, because the
 decorator API derives each schema from a Python signature, and the point here is that the schemas are
 the very same dicts the investigator sends.
@@ -19,6 +26,7 @@ the very same dicts the investigator sends.
 from __future__ import annotations
 
 import argparse
+import sys
 
 import mcp_types as types
 from mcp.server import Server
@@ -58,6 +66,15 @@ def context_for_page(data: str, bootstrap: str, telemetry: str, pages: str, aler
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--group" in argv:
+        i = argv.index("--group")
+        group, argv = (argv[i + 1] if i + 1 < len(argv) else ""), argv[:i] + argv[i + 2:]
+        if group == "attacker":
+            from sentinel_stream import attacker
+            return attacker.mcp_main(argv)
+        if group != "triage":
+            raise SystemExit("--group must be triage (the default) or attacker")
     import anyio
     from mcp.server.stdio import stdio_server
 
