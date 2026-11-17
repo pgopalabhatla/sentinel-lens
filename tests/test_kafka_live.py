@@ -106,3 +106,55 @@ def test_injection_of_nothing_reproduces_the_quiet_week_exactly(prefix):
     r = out["result"]
     assert (r["n_injections"], r["page_outs"], r["false_page_outs"], r["days"]) == (0, 4, 4, 7.0)
     assert r["false_pages_per_day"] == pytest.approx(4 / 7)
+
+
+def test_the_publisher_applies_generic_effects_and_reports_the_rejected_ones_on_the_answer_key(prefix):
+    """Publisher only (no consumer): four commands on the control topic, two of which cannot be
+    carried out. The answer key holds exactly what was applied and why the rest was not."""
+    if not (ROOT / "data" / "metrics").exists():
+        pytest.skip("dataset not generated")
+    from sentinel_sim.replay import DataSource
+    from sentinel_stream import injector
+    from sentinel_stream.publisher import messages, publish
+
+    start, end, history_start = "2026-10-07 05:00", "2026-10-07 07:00", "2026-09-28"
+    at = pd.Timestamp("2026-10-07 05:30", tz="UTC")
+    heap, p99 = "jvm_heap_used_ratio|kafka-0", "kafka_produce_request_p99_ms|kafka-ingest"
+    topic = {k: prefix + k for k in ("telemetry", "control", "answer_key")}
+    injector.send(BOOTSTRAP, topic["control"], [
+        {"cmd": "inject", "id": "good", "at": at.isoformat(), "intent": "slow produce requests, heap creeping", "severity": "subtle",
+         "effects": [{"series_id": p99, "op": "add", "shape": "flat", "magnitude": 300, "duration_min": 30},
+                     {"series_id": heap, "op": "add", "shape": "ramp", "magnitude": 0.1, "duration_min": 30},
+                     {"series_id": heap, "op": "add", "shape": "flat", "magnitude": 0.9, "duration_min": 30}]},     # would pass 1
+        {"cmd": "inject", "id": "no-series", "at": at.isoformat(), "effects": [{"series_id": "made_up|x", "op": "add", "shape": "flat",
+                                                                                 "magnitude": 1, "duration_min": 5}]},
+        {"cmd": "inject", "id": "too-big", "at": at.isoformat(), "scenario": "trino_heavy_query", "target": "trino-lakehouse",
+         "params": {"magnitude": 9}},
+        {"cmd": "inject", "id": "named", "at": (at + pd.Timedelta("45min")).isoformat(), "scenario": "rehearsal_restart",
+         "target": "airflow-worker-0", "params": {"duration_min": 10}, "severity": "noticeable"}])
+    ds = DataSource(ROOT / "data")
+    from sentinel_stream.scenarios_live import SCENARIOS
+    publish(ds, start, end, bootstrap=BOOTSTRAP, topic=topic["telemetry"], history_start=history_start, control=topic["control"],
+            answer_key=topic["answer_key"], scenarios={**SCENARIOS, REHEARSAL.name: REHEARSAL})
+
+    records = broker.read_topic(BOOTSTRAP, topic["answer_key"])
+    by = {(r["event"], r.get("id")): r for r in records}
+    assert [(r["event"], r.get("id")) for r in records] == [("rejected", "no-series"), ("rejected", "too-big"), ("started", "good"),
+                                                           ("stopped", "good"), ("started", "named"), ("stopped", "named"), ("published", None)]
+    assert "not in the catalog" in by["rejected", "no-series"]["reasons"][0] and "outside its range" in by["rejected", "too-big"]["reasons"][0]
+    good = by["started", "good"]
+    assert (good["scenario"], good["intent"], good["severity"]) == ("custom", "slow produce requests, heap creeping", "subtle")
+    assert [(e["series_id"], e["shape"], e["magnitude"]) for e in good["effects"]] == [(p99, "flat", 300.0), (heap, "ramp", 0.1)]
+    assert len(good["rejected"]) == 1 and "above its limit of 1" in good["rejected"][0]["reason"]
+    assert good["entities"] == ["cluster:kafka-ingest", "pod:kafka-0"] and good["series"] == [heap, p99]
+    assert by["started", "named"]["severity"] == "noticeable" and "intent" not in by["started", "named"]
+
+    plain = {wire.event_time(m): m for m in messages(ds.at(end), start, end, history_start) if m["type"] == "metrics"}
+    sent = {wire.event_time(m): m for m in broker.read_topic(BOOTSTRAP, topic["telemetry"]) if m["type"] == "metrics"}
+    for ts, was in plain.items():
+        now, minute = sent[ts]["values"], (ts - at) / pd.Timedelta("1min")
+        if 0 <= minute < 30:
+            assert now[p99] == was["values"][p99] + 300 and now[heap] == pytest.approx(was["values"][heap] + 0.1 * (minute + 1) / 30)
+        else:
+            assert now[p99] == was["values"][p99] and now[heap] == was["values"][heap]
+

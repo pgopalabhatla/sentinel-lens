@@ -26,6 +26,11 @@ Consequences worth knowing: an alert that joins a page AFTER that page has paged
 detection (nobody is paged again), and a page that paged before the injection started does not count
 however much it grows. The column `alerts near target` shows such cases: it counts the alerts on or
 1 hop from the targets that fired inside the window, paged for or not.
+
+`severity` (noticeable | subtle) and `intent` (free text) are what the caller said about an injection
+when sending it. They are REPORTED: a table by severity, two columns per injection. They are never
+used to decide a match: the rule above does not read them. `rejected` records (commands or effects
+the publisher refused) are not injections and are not counted.
 """
 from __future__ import annotations
 
@@ -101,16 +106,19 @@ def score(answer_key: list, pages: list, topology, days: float | None = None) ->
                      "start": inj["start"], "stop": inj["stop"], "detected": first is not None,
                      "time_to_detect_min": None if first is None else (first["time"] - inj["start"]) / pd.Timedelta("1min"),
                      "paged_by": None if first is None else f"{first['alert']['target']} ({first['alert']['detector']})",
-                     "matching_page_outs": len(inj["matches"]), "alerts_near_target": inj["alerts_near_target"]})
+                     "matching_page_outs": len(inj["matches"]), "alerts_near_target": inj["alerts_near_target"],
+                     # reported, never matched on:
+                     "severity": inj.get("severity"), "intent": inj.get("intent"), "effects": inj.get("effects")})
     false = [o for o in outs if not o["matched"]]
     times = [r["time_to_detect_min"] for r in rows if r["detected"]]
-    by_scenario = {}
+    by_scenario, by_severity = {}, {}
     for r in rows:
-        s = by_scenario.setdefault(r["scenario"], {"injected": 0, "detected": 0, "times": []})
-        s["injected"] += 1
-        s["detected"] += r["detected"]
-        s["times"] += [r["time_to_detect_min"]] if r["detected"] else []
-    return {"injections": rows, "by_scenario": by_scenario, "days": days,
+        for table, key in ((by_scenario, r["scenario"]), (by_severity, r["severity"] or "not given")):
+            s = table.setdefault(key, {"injected": 0, "detected": 0, "times": []})
+            s["injected"] += 1
+            s["detected"] += r["detected"]
+            s["times"] += [r["time_to_detect_min"]] if r["detected"] else []
+    return {"injections": rows, "by_scenario": by_scenario, "by_severity": by_severity, "days": days,
             "n_injections": len(rows), "n_detected": sum(r["detected"] for r in rows),
             "median_time_to_detect_min": median(times) if times else None, "max_time_to_detect_min": max(times) if times else None,
             "page_outs": len(outs), "matched_page_outs": len(outs) - len(false), "false_page_outs": len(false),
@@ -124,7 +132,10 @@ def _minutes(x) -> str:
     return "-" if x is None else f"{x:.0f}"
 
 
-def _params(p: dict) -> str:
+def _params(p: dict, effects=None) -> str:
+    if effects:                              # a generic injection: its effects, as applied
+        return "; ".join(f"{e['op']} {e['shape']} {e['magnitude']:g} on {e['series_id']} "
+                         f"for {(utc(e['stop']) - utc(e['start'])) / pd.Timedelta('1min'):g} min" for e in effects)
     return ", ".join(f"{k}={v:g}" for k, v in p.items())
 
 
@@ -146,13 +157,21 @@ def markdown(result: dict) -> str:
              "## By scenario", "", "| scenario | injected | detected | times to detect (min) |", "|---|---|---|---|"]
     for name, s in sorted(r["by_scenario"].items()):
         lines.append(f"| {name} | {s['injected']} | {s['detected']} | {', '.join(_minutes(t) for t in s['times']) or '-'} |")
+    lines += ["", "## By severity (as given by whoever injected; reported, not used for matching)", "",
+              "| severity | injected | detected | times to detect (min) |", "|---|---|---|---|"]
+    for name in ("noticeable", "subtle", "not given"):
+        if name in r["by_severity"]:
+            s = r["by_severity"][name]
+            lines.append(f"| {name} | {s['injected']} | {s['detected']} | {', '.join(_minutes(t) for t in s['times']) or '-'} |")
     lines += ["", "## Per injection", "",
               "| id | scenario | target | start (UTC) | stop (UTC) | parameters | detected | time to detect (min) | "
-              "first paged by | matching page-outs | alerts near target |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+              "first paged by | matching page-outs | alerts near target | severity | intent |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for i in r["injections"]:
-        lines.append(f"| {i['id']} | {i['scenario']} | {i['target']} | {i['start']:%b %d %H:%M} | {i['stop']:%b %d %H:%M} | "
-                     f"{_params(i['params'])} | {'yes' if i['detected'] else 'NO'} | {_minutes(i['time_to_detect_min'])} | "
-                     f"{cell(i['paged_by'] or '-')} | {i['matching_page_outs']} | {i['alerts_near_target']} |")
+        lines.append(f"| {i['id']} | {i['scenario']} | {i['target'] or '-'} | {i['start']:%b %d %H:%M} | {i['stop']:%b %d %H:%M} | "
+                     f"{cell(_params(i['params'], i['effects']))} | {'yes' if i['detected'] else 'NO'} | {_minutes(i['time_to_detect_min'])} | "
+                     f"{cell(i['paged_by'] or '-')} | {i['matching_page_outs']} | {i['alerts_near_target']} | "
+                     f"{i['severity'] or '-'} | {cell(i['intent'] or '-')} |")
     lines += ["", "## False page-outs", ""]
     if r["false"]:
         lines += ["| time (UTC) | page | alerts in the page when it paged |", "|---|---|---|"]

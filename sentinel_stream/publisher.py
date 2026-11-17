@@ -15,7 +15,9 @@ minutes where they belong.
 Injection. The publisher is also where failures are injected into the live stream: it reads
 commands from the topic `control`, applies the active scenarios to the readings it sends from the
 injection time on, and records what it injected on `answer_key` (injector.py, scenarios_live.py).
-With no command the stream is the data as it is.
+A command is either a named scenario or a list of primitive effects; effects that would break a
+series' physical limits are rejected and reported on `answer_key`. With no command the stream is the
+data as it is.
 
 Order is the one thing that must hold: the topic has one partition and one publisher writes to it
 with an idempotent producer (no reordering or duplicates from retries), so the consumer reads the
@@ -93,10 +95,13 @@ def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", 
                 log(f"control: ignored (sent before this publisher started, not scheduled for its stream): {cmd}")
                 return
             try:
-                injector.command(cmd)
+                for r in injector.command(cmd):
+                    log(f"control: effect rejected ({r['reason']}): {r['effect']}")
                 log(f"control: accepted {cmd}")
-            except ValueError as e:
+            except ValueError as e:              # nothing of it can be carried out: say so where the caller can read it
                 log(f"control: refused {cmd}: {e}")
+                record = {"event": "rejected", "id": str(cmd.get("id", "")), "reasons": [str(e)]}
+                producer.produce(answer_key, value=wire.dumps(record), key=record["id"], on_delivery=delivered)
 
         seen = broker.end_offset(bootstrap, control)
         for cmd in broker.read_topic(bootstrap, control, end=seen):
@@ -129,6 +134,8 @@ def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", 
                 for record in records:
                     producer.produce(answer_key, value=wire.dumps(record), key=record["id"], on_delivery=delivered)
                     log(f"answer key: {record}")
+                if records:
+                    producer.flush()                    # the answer key is durable before the readings it describes
                 if message is None:                     # a run that does not happen while its DAG is paused
                     continue
             while True:
