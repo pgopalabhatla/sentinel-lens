@@ -242,10 +242,10 @@ def main(argv=None) -> int:
 
     refuse_unless_ready(commands)
     commit = git("rev-parse", "HEAD")
-    out = run(DATA, START, END, commands, NAME + ".")
+    out = run(DATA, START, END, commands, NAME + "-")
     header = [f"Written by `scripts/run_live_week.py --run-once` and not edited afterwards. Protocol: [docs/live-protocol.md](../live-protocol.md).",
               "", f"- code: commit `{commit}`", f"- world: `data_live` (`--no-incidents --days 35 --seed 11`), stream {START} to {END} (UTC), "
-              f"engine warm-started on the 28 days before", f"- schedule seed: {SEED}; topics: `{NAME}.*`"]
+              f"engine warm-started on the 28 days before", f"- schedule seed: {SEED}; topics: `{NAME}-*`"]
     RESULT.parent.mkdir(parents=True, exist_ok=True)
     RESULT.write_text(report(out, commands, quiet_page_outs(DATA, START, END), header))
     print(f"saved {RESULT.relative_to(ROOT)}")
