@@ -5,19 +5,25 @@ there is one implementation and one list of tools (`TOOLS`), each with its JSON 
 
 Where each tool reads from
 --------------------------
-    get_page          the `pages` topic (and `alerts`, for which alerts are demoted)    the stream
-    query_metric      the `telemetry` topic: the readings as they were STREAMED         the stream
-    kafka_lag         the `telemetry` topic (lag, consume rate, the topic's in-rate)    the stream
-    dag_runs          the `telemetry` topic's run messages; the schedule from config    the stream
-    related_entities  the entity graph (catalog + relationships + topology_extra)       configuration
-    recent_logs       the log store (the data directory, through DataSource)            history store
-    k8s_events        the Kubernetes event store (the data directory)                   history store
-    recent_changes    the change log (the data directory)                               history store
+    get_page             the `pages` topic (and `alerts`, for which alerts are demoted)    the stream
+    query_metric         the `telemetry` topic: the readings as they were STREAMED         the stream
+    baseline_comparison  the seasonal detector's own 5-minute means and history: the       the stream (before it
+                         history store before the stream started, the stream after         started: history store)
+    kafka_lag            the `telemetry` topic (lag, consume rate, the topic's in-rate)    the stream
+    dag_runs             the `telemetry` topic's run messages; the schedule from config    the stream
+    related_entities     the entity graph (catalog + relationships + topology_extra)       configuration
+    recent_logs          stream v1: the log store (the data directory, DataSource)         history store
+                         stream v2: the streamed `logs` batches                            the stream (before it
+    k8s_events           likewise, Kubernetes events                                       started: history store)
+    recent_changes       likewise, the change log
 
 Metrics come from the stream and never from the data directory's metrics file: whatever the
-publisher sent, changed or left out is what the tools see. Logs, events and changes are not on the
-stream at all, so those three read the data directory, which stands in for Loki, the Kubernetes API
-and a deploy log. Every result says which of the two it came from (`source`).
+publisher sent, changed or left out is what the tools see. On stream version 1, logs, events and
+changes are not on the stream at all, so those three read the data directory, which stands in for
+Loki, the Kubernetes API and a deploy log. On version 2 they are on the stream (wire.py) and the tools
+read them from there; for times before the stream started they read the data directory, as a log
+store would hold what came before. Every result says where it came from (`source`). Which version a
+Context reads is given when it is built (`stream_version`), never guessed.
 
 Causality
 ---------
@@ -47,13 +53,19 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from sentinel_lens import router
 from sentinel_lens.correlator import Topology, build_topology
+from sentinel_lens.detectors.seasonal import seasonal_scores
 from sentinel_lens.topology_extra import EXTRA_EDGES
 from sentinel_stream import wire
 from sentinel_stream.events import utc
+from sentinel_stream.seasonal_step import LOOKBACK_DAYS, SCORE
 
-ONE_MIN = pd.Timedelta("1min")
+ONE_MIN, BUCKET = pd.Timedelta("1min"), pd.Timedelta("5min")
 STREAM, HISTORY, CONFIG = "stream", "history store (data directory)", "configuration (catalog and topology)"
+STREAM_THEN_HISTORY = "stream (before the stream started: history store)"
+LOG_COLUMNS = ["ts", "pod", "level", "logger", "message"]
+EVENT_COLUMNS = ["ts", "type", "reason", "object", "object_kind", "namespace", "message", "count"]
 MAX_RESULT_CHARS = 16000          # a tool result larger than this is a bug in the tool, not something to send
 
 
@@ -83,7 +95,9 @@ class StreamStore:
         self.runs: list = []          # dag_run messages
         self.pages: list = []         # page records
         self.alerts: list = []        # alert records
+        self.evidence: dict = {kind: [] for kind in wire.EVIDENCE}     # stream v2: records of the batches
         self._frame = None
+        self._evidence_frames: dict = {}
 
     @classmethod
     def from_records(cls, telemetry=(), pages=(), alerts=()) -> "StreamStore":
@@ -103,6 +117,24 @@ class StreamStore:
             self._frame = None
         elif message["type"] == wire.DAG_RUN:
             self.runs.append(message)
+        elif wire.is_evidence(message):
+            self.evidence[message["type"]].extend(wire.records_of(message))
+            self._evidence_frames.pop(message["type"], None)
+
+    def evidence_frame(self, kind: str) -> pd.DataFrame:
+        """The streamed logs or k8s events as a table with the columns DataSource gives them."""
+        if kind not in self._evidence_frames:
+            records = self.evidence[kind]
+            if kind == wire.LOGS:
+                frame = pd.DataFrame.from_records(records, columns=LOG_COLUMNS)
+            else:
+                frame = pd.DataFrame.from_records(
+                    [{**{k: r[k] for k in ("ts", "type", "reason", "message", "count")}, "object": r["involved_object"]["name"],
+                      "object_kind": r["involved_object"]["kind"], "namespace": r["involved_object"]["namespace"]}
+                     for r in records], columns=EVENT_COLUMNS)
+            frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
+            self._evidence_frames[kind] = frame.drop_duplicates().sort_values("ts", kind="stable").reset_index(drop=True)
+        return self._evidence_frames[kind]
 
     def add_page(self, record: dict) -> None:
         self.pages.append(record)
@@ -126,6 +158,60 @@ class StreamStore:
         return [i for i, r in enumerate(self.pages) if r["kind"] == "paged"]
 
 
+class StreamEvidence:
+    """Stream v2's logs, k8s events and changes as a Context sees them: what was streamed before `now`,
+    and before the stream started what the history store holds. The same three methods (and
+    arguments) as DataSource, so the tools do not care which they read."""
+
+    def __init__(self, store: StreamStore, history, now, stream_start):
+        cut = lambda df: df[df.ts < now].copy()                   # a batch stamped T <= now holds records before T
+        self._logs, self._events = cut(store.evidence_frame(wire.LOGS)), cut(store.evidence_frame(wire.K8S_EVENTS))
+        seen, self._changes = set(), []
+        for c in store.evidence[wire.CHANGES]:
+            if utc(c["ts"]) < now and c["change_id"] not in seen:
+                seen.add(c["change_id"])
+                self._changes.append(c)
+        self.history, self.start = history, stream_start
+
+    def _split(self, start, end) -> tuple:
+        """(the part of [start, end) before the stream, read from history; or None), the streamed part's start."""
+        if self.start is None:
+            return (start, end), end
+        return ((start, min(end, self.start)) if start < self.start else None), max(start, self.start)
+
+    def logs(self, pod=None, start=None, end=None, level=None, contains=None, limit=None) -> pd.DataFrame:
+        early, s = self._split(utc(start), utc(end))
+        parts = [self.history.logs(pod=pod, start=early[0], end=early[1], level=level, contains=contains, limit=None)[LOG_COLUMNS]] \
+            if early else []
+        df = self._logs
+        m = (df.ts >= s) & (df.ts < utc(end))
+        if pod:
+            m &= df.pod == pod
+        if level:
+            m &= df.level.isin([level] if isinstance(level, str) else level)
+        if contains:
+            m &= df.message.str.contains(contains, regex=False)
+        out = pd.concat(parts + [df[m]], ignore_index=True) if parts else df[m]
+        return out.tail(limit) if limit else out
+
+    def k8s_events(self, pod=None, start=None, end=None, reason=None) -> pd.DataFrame:
+        early, s = self._split(utc(start), utc(end))
+        parts = [self.history.k8s_events(pod=pod, start=early[0], end=early[1], reason=reason).reindex(columns=EVENT_COLUMNS)] \
+            if early else []
+        df = self._events
+        m = (df.ts >= s) & (df.ts < utc(end))
+        if pod:
+            m &= df.object == pod
+        if reason:
+            m &= df.reason.isin([reason] if isinstance(reason, str) else reason)
+        return pd.concat(parts + [df[m]], ignore_index=True) if parts else df[m]
+
+    def changes(self, start=None, end=None, target=None) -> list:
+        early, s = self._split(utc(start), utc(end))
+        before = self.history.changes(start=early[0], end=early[1], target=target) if early else []
+        return before + [c for c in self._changes if s <= utc(c["ts"]) < utc(end) and (target is None or target in c["target"])]
+
+
 # ----------------------------------------------------------------------------------- configuration
 @dataclass
 class Catalog:
@@ -137,6 +223,7 @@ class Catalog:
     pods: frozenset
     dags: dict
     entities: frozenset
+    routes: dict = field(default_factory=dict)     # series_id -> (rule, history mode, abs floor), the router's table
 
     @classmethod
     def from_ds(cls, ds) -> "Catalog":
@@ -153,8 +240,11 @@ class Catalog:
         entities = frozenset(series_of) | frozenset(topology.neighbours)
         dags = {k: {"schedule": v["schedule"], "sla_minutes": v["sla_minutes"]} for k, v in ds._s.topology["dags"].items()}
         entities |= {f"dag:{d}" for d in dags}
+        table = router.route_series(ds.series(layer=[1, 2, 3]))            # as the engine routes them (engine.warm_start)
+        routes = {s: (rule, h if isinstance(h, str) else None, float(f) if f == f else 0.0)
+                  for s, rule, h, f in zip(table.series_id, table.rule, table.history, table.abs_floor)}
         return cls(topology, relation, dict(zip(catalog.series_id, catalog.unit)),
-                   {k: sorted(v) for k, v in series_of.items()}, frozenset(ds.pods().pod), dags, entities)
+                   {k: sorted(v) for k, v in series_of.items()}, frozenset(ds.pods().pod), dags, entities, routes)
 
     def resolve_entity(self, name: str) -> tuple:
         """("kind:name", None) or (None, error). Takes "kind:name", a series id, or a bare name."""
@@ -187,25 +277,33 @@ class Context:
     runs: list                        # streamed run messages stamped <= now
     page_records: list                # page records up to and including the paged one
     alert_records: list               # alert records emitted <= now
-    history: object                   # DataSource.at(now): logs, k8s events, changes, schedule
+    history: object                   # DataSource.at(now): schedule, and metrics from before the stream
     catalog: Catalog
     stream_start: pd.Timestamp | None
     calls: list = field(default_factory=list)   # (tool, args) of every call made through `call`
+    evidence: object = None           # logs, k8s events, changes: `history` (stream v1) or a StreamEvidence (v2)
+    evidence_source: str = HISTORY
 
     @classmethod
-    def at_page(cls, store: StreamStore, ds, index: int, catalog: Catalog | None = None) -> "Context":
-        """The context of the page-out at `store.pages[index]` (a `paged` record), as it was then."""
+    def at_page(cls, store: StreamStore, ds, index: int, catalog: Catalog | None = None, stream_version: int = 1) -> "Context":
+        """The context of the page-out at `store.pages[index]` (a `paged` record), as it was then.
+        stream_version 2: logs, events and changes are read from the stream (module docstring)."""
+        if stream_version not in wire.STREAM_VERSIONS:
+            raise ValueError(f"stream_version must be one of {wire.STREAM_VERSIONS}")
         record = store.pages[index]
         if record["kind"] != "paged":
             raise ValueError(f"pages[{index}] is a {record['kind']!r} record, not a page-out")
         now = utc(record["emitted_at"])
         frame = store.metrics()
+        history = ds.at(now)
+        stream_start = frame.index[0] if len(frame.index) else None
+        evidence = history if stream_version == 1 else StreamEvidence(store, history, now, stream_start)
         return cls(now=now, page=int(record["page"]), page_id=record["page_id"],
                    metrics=frame.loc[:now].copy(), runs=[m for m in store.runs if wire.event_time(m) <= now],
                    page_records=list(store.pages[:index + 1]),
                    alert_records=[r for r in store.alerts if utc(r["emitted_at"]) <= now],
-                   history=ds.at(now), catalog=catalog or Catalog.from_ds(ds),
-                   stream_start=frame.index[0] if len(frame.index) else None)
+                   history=history, catalog=catalog or Catalog.from_ds(ds), stream_start=stream_start,
+                   evidence=evidence, evidence_source=HISTORY if stream_version == 1 else STREAM_THEN_HISTORY)
 
 
 # ------------------------------------------------------------------------------------------- tools
@@ -328,10 +426,10 @@ def recent_logs(ctx: Context, pod: str, window_minutes: int = 30, level: str | N
     name = _pod(ctx, pod)
     if name is None:
         return {"error": f"unknown pod {pod!r}" + _close(pod, ctx.catalog.pods)}
-    df = ctx.history.logs(pod=name, start=ctx.now - pd.Timedelta(minutes=window_minutes), end=ctx.now, level=level,
-                          contains=contains, limit=None)
+    df = _evidence(ctx).logs(pod=name, start=ctx.now - pd.Timedelta(minutes=window_minutes), end=ctx.now, level=level,
+                             contains=contains, limit=None)
     templates = Counter(re.sub(r"\d+(?:\.\d+)?", "#", m) for m in df.message)
-    return {"source": HISTORY, "pod": name, "window": f"{_t(ctx.now - pd.Timedelta(minutes=window_minutes))} .. {_t(ctx.now)}",
+    return {"source": ctx.evidence_source, "pod": name, "window": f"{_t(ctx.now - pd.Timedelta(minutes=window_minutes))} .. {_t(ctx.now)}",
             "lines": int(len(df)), "by_level": dict(Counter(df.level)),
             "top_templates": [{"template": t[:200], "n": n} for t, n in templates.most_common(8)],
             "latest": [{"ts": _ts_s(r.ts), "level": r.level, "logger": r.logger, "message": r.message[:300]}
@@ -344,9 +442,9 @@ def k8s_events(ctx: Context, pod: str | None = None, window_minutes: int = 120, 
         name = _pod(ctx, pod)
         if name is None:
             return {"error": f"unknown pod {pod!r}" + _close(pod, ctx.catalog.pods)}
-    df = ctx.history.k8s_events(pod=name, start=ctx.now - pd.Timedelta(minutes=window_minutes), end=ctx.now, reason=reason)
+    df = _evidence(ctx).k8s_events(pod=name, start=ctx.now - pd.Timedelta(minutes=window_minutes), end=ctx.now, reason=reason)
     shown = 40
-    return {"source": HISTORY, "pod": name, "window": f"{_t(ctx.now - pd.Timedelta(minutes=window_minutes))} .. {_t(ctx.now)}",
+    return {"source": ctx.evidence_source, "pod": name, "window": f"{_t(ctx.now - pd.Timedelta(minutes=window_minutes))} .. {_t(ctx.now)}",
             "events": int(len(df)), "by_reason": dict(Counter(df.reason)), "by_type": dict(Counter(df.type)),
             "latest": [{"ts": _ts_s(r.ts), "object": r.object, "type": r.type, "reason": r.reason, "message": r.message[:200],
                         "count": int(r.count)} for r in df.tail(shown).itertuples()],
@@ -354,9 +452,64 @@ def k8s_events(ctx: Context, pod: str | None = None, window_minutes: int = 120, 
 
 
 def recent_changes(ctx: Context, window_hours: int = 24, target: str | None = None) -> dict:
-    found = ctx.history.changes(start=ctx.now - pd.Timedelta(hours=window_hours), end=ctx.now, target=target)
-    return {"source": HISTORY, "window": f"{_t(ctx.now - pd.Timedelta(hours=window_hours))} .. {_t(ctx.now)}",
+    found = _evidence(ctx).changes(start=ctx.now - pd.Timedelta(hours=window_hours), end=ctx.now, target=target)
+    return {"source": ctx.evidence_source, "window": f"{_t(ctx.now - pd.Timedelta(hours=window_hours))} .. {_t(ctx.now)}",
             "changes": len(found), "latest": found[-30:]}
+
+
+def _evidence(ctx: Context):
+    return ctx.evidence if ctx.evidence is not None else ctx.history
+
+
+def _minutes(ctx: Context, sid: str, start, end) -> pd.Series:
+    """One series' minute readings in [start, end): from the history store before the stream started,
+    from the stream after. Never the data directory's readings for the streamed period: those are not
+    what was sent."""
+    split = end if ctx.stream_start is None else min(end, ctx.stream_start)
+    parts = []
+    if start < split:
+        early = ctx.history.query([sid], start=start, end=split)
+        if sid in early.columns:
+            parts.append(early[sid])
+    if ctx.stream_start is not None and sid in ctx.metrics.columns:
+        col = ctx.metrics[sid]
+        parts.append(col[(col.index >= max(start, ctx.stream_start)) & (col.index < end)])
+    if not parts:
+        return pd.Series(dtype=float)
+    s = pd.concat(parts).astype(float)
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
+def baseline_comparison(ctx: Context, series_id: str, window_minutes: int = 60) -> dict:
+    """The seasonal detector's view of one series: its 5-minute means against the same time of day on
+    comparable earlier days, with the detector's own settings and history mode for the series."""
+    if series_id not in ctx.catalog.unit_of:
+        return {"error": f"unknown series {series_id!r}" + _close(series_id, ctx.catalog.unit_of)}
+    rule, mode, abs_floor = ctx.catalog.routes.get(series_id, (None, None, 0.0))
+    seasonal = rule == "seasonal"
+    mode = mode or router.DEFAULT_HISTORY
+    last = (ctx.now + ONE_MIN).floor(BUCKET) - BUCKET                    # the newest bucket whose 5 minutes were all read
+    n = max(1, window_minutes // 5)
+    first = last - (n - 1) * BUCKET
+    grid = pd.date_range(first - pd.Timedelta(days=LOOKBACK_DAYS), last, freq=BUCKET)
+    minutes = _minutes(ctx, series_id, grid[0], last + BUCKET)
+    means = minutes.resample(BUCKET).mean().reindex(grid) if len(minutes) else pd.Series(np.nan, index=grid)
+    means.name = series_id
+    scores = seasonal_scores(means, **{**SCORE, "history": mode, "abs_floor": abs_floor}).set_index("ts").loc[first:last]
+    rows = [{"bucket": _t(t), "value": _r(r.value), "expected": _r(r.expected), "wobble": _r(r.wobble),
+             "z": _r(r.z), "hot": bool(r.hot), "baseline_days": int(r.baseline_days)} for t, r in scores.iterrows()]
+    out = {"source": STREAM_THEN_HISTORY, "series_id": series_id, "unit": ctx.catalog.unit_of.get(series_id, ""),
+           "entity": ctx.catalog.topology.entity(series_id), "detector": rule or "not routed", "history_mode": mode,
+           "hot_when_abs_z_above": SCORE["threshold"], "buckets": rows,
+           "latest_explanation": next((e for e in scores.explanation[::-1] if isinstance(e, str)), None),
+           "how_to_read": "value: the mean of 5 minutes; expected: the median of the same 5 minutes of the day on comparable "
+                          "earlier days; wobble: their robust spread (at least 5% of expected); z = (value - expected) / wobble. "
+                          "Normal daily and weekly patterns are in `expected`."}
+    if not seasonal:
+        out["note"] = (f"this series is not scored by the seasonal baseline (its rule: {rule or 'none'}); the comparison uses "
+                       f"the default history mode" + ("; it is a cumulative counter, so compare increases, not values"
+                                                      if series_id.split("|")[0].endswith("_total") else ""))
+    return out
 
 
 def dag_runs(ctx: Context, dag_id: str | None = None, window_hours: int = 24) -> dict:
@@ -434,6 +587,13 @@ TOOLS = [
          _schema({"series_id": _str("e.g. 'kafka_consumergroup_lag|orders-etl'"),
                   "window_minutes": _int("how far back to look", 10, 10080, 180),
                   "points": _int("how many downsampled points to return", 6, 120, 48)}, ["series_id"]), query_metric),
+    Tool("baseline_comparison", "How one series compares with what the seasonal detector expects for the same time of "
+         "day on comparable earlier days, from the detector's own 5-minute means and history up to the page: per "
+         "5-minute bucket the value, the expected value, the wobble (robust spread) and z. Use it to tell whether a "
+         "reading, traffic included, is unusual for this time of day or just the normal daily pattern.",
+         _schema({"series_id": _str("e.g. 'kafka_messages_in_per_sec|orders'"),
+                  "window_minutes": _int("how many minutes of the latest 5-minute buckets to show", 5, 360, 60)},
+                 ["series_id"]), baseline_comparison),
     Tool("related_entities", "Entities connected to one entity in the platform's entity graph (pods, consumer "
          "groups, topics, clusters, DAGs, Spark and Flink apps), with how they are related and the series each one has.",
          _schema({"entity": _str("'kind:name' (e.g. 'pod:kafka-1'), a series id, or a bare name"),

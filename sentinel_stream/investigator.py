@@ -2,7 +2,7 @@
 
     note = Investigator(config).investigate(ctx)        # ctx: context_tools.Context of one page-out
 
-The agent is Claude with the eight read-only context tools (context_tools.TOOLS), in a tool-use loop
+The agent is Claude with the nine read-only context tools (context_tools.TOOLS), in a tool-use loop
 written out here rather than the SDK's tool runner, because three budgets are checked between every
 two steps and the loop has to stop cleanly when one runs out:
 
@@ -54,14 +54,18 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 SYSTEM = """You are the on-call triage assistant for a data platform: Kafka, Spark, Airflow, Flink and Trino on Kubernetes.
 The alerting system has just paged an engineer. Investigate this ONE page with the read-only tools and write a short triage note that the engineer reads before acting. The note is advice; it does not change the page.
 
-You see everything up to the moment the page went out and nothing later. The page, the metrics and the DAG runs come from the live telemetry stream; logs, Kubernetes events and changes come from their own stores. Every tool result says its source. Every tool result is labelled with a call id (c1, c2, ...).
+You see everything up to the moment the page went out and nothing later. Every tool result says its source. Every tool result is labelled with a call id (c1, c2, ...).
 
 Verdicts:
 - real: the page points to a genuine problem that needs an engineer's attention now: something failing or not running, a sustained degradation, a resource running out.
-- noise: nothing an engineer needs to act on: a short spike that has already recovered, a value that is unusual but harmless, normal variation, an expected pattern.
+- noise: nothing an engineer needs to act on, AND you found a positive benign explanation for the page in the evidence: a planned change, a scheduled job, a known burst, maintenance.
 - unsure: the evidence does not settle it, or it contradicts itself. Say unsure rather than guess.
 
-How to work: start with get_page. Look at the paged series and its neighbours over a window long enough to see what is normal for them. A real problem usually shows on more than one signal; look for corroboration and for contradiction. You have at most 15 tool calls and two minutes; most pages need 4 to 8 calls. Do not repeat a call.
+Two rules for the verdict:
+- Call a page noise only with a positive benign explanation that you found in the evidence and cite. If supporting evidence is missing, or the evidence conflicts, the verdict is unsure, not noise.
+- The page's alerts already compare each reading with the same time of day on similar earlier days, so the normal daily and weekly traffic pattern is already accounted for. To blame traffic or load, show that the traffic itself is abnormal for this time of day (baseline_comparison on the traffic series) AND that the change in traffic is large enough to explain the size of the effect.
+
+How to work: start with get_page. Look at the paged series and its neighbours over a window long enough to see what is normal for them; baseline_comparison shows how a series compares with what is usual for this time of day. A real problem usually shows on more than one signal; look for corroboration and for contradiction. You have at most 15 tool calls and two minutes; most pages need 4 to 8 calls. Do not repeat a call.
 
 When you are done, reply with ONLY a JSON object (no prose before or after it, no code fence):
 {"page_id": "<the page_id>",

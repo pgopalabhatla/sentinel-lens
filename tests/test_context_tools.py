@@ -103,6 +103,112 @@ def test_bad_calls_come_back_as_errors_not_exceptions(store, ds):
         assert is_error and "error" in result, (name, args, result)
 
 
+# ------------------------------------------------------------------------ stream v2: evidence on the stream
+def v2_store(start="01:00"):
+    """The world's stream from `start` on, plus logs / events / changes batches that differ from the
+    data directory's (so a test can tell which one a tool read). Each batch stamped T holds [T-1min, T)."""
+    from sentinel_stream import wire
+    pages, alerts = world.pages_and_alerts()
+    telemetry = [m for m in world.telemetry() if wire.event_time(m) >= world.at(start)]
+    for t in pd.date_range(world.at(start), periods=6 * 24, freq="10min"):
+        line = {"ts": (t + pd.Timedelta("3s")).strftime("%Y-%m-%dT%H:%M:%SZ"), "pod": "p-a", "level": "WARN", "logger": "app",
+                "message": f"streamed line {t:%H:%M}"}
+        telemetry.append(wire.evidence_message(wire.LOGS, t + pd.Timedelta("1min"), [line]))
+    event = {"ts": "2026-01-05T01:20:00Z", "type": "Warning", "reason": "OOMKilled", "message": "streamed OOMKilled p-a", "count": 1,
+             "involved_object": {"kind": "Pod", "name": "p-a", "namespace": "ns"}}
+    late = dict(event, ts="2026-01-05T02:00:30Z", reason="BackOff")       # in the batch stamped 02:01: after a page at 02:00
+    change = {"change_id": "chg-0001", "ts": "2026-01-05T01:30:00Z", "kind": "deploy", "target": "p-a",
+              "details": {"image": ["b", "c"]}, "author": "x", "description": "streamed deploy"}
+    telemetry += [wire.evidence_message(wire.K8S_EVENTS, world.at("01:21"), [event]),
+                  wire.evidence_message(wire.K8S_EVENTS, world.at("02:01"), [late]),
+                  wire.evidence_message(wire.CHANGES, world.at("01:31"), [change])]
+    return ct.StreamStore.from_records(sorted(telemetry, key=wire.position), pages, alerts)
+
+
+def test_on_stream_v2_logs_events_and_changes_come_from_the_stream_and_from_history_before_it(ds):
+    store = v2_store()
+    index = next(i for i in store.paged() if store.pages[i]["page"] == 2)              # paged at 02:00
+    ctx = ct.Context.at_page(store, ds, index, stream_version=2)
+    logs, _ = ct.call(ctx, "recent_logs", {"pod": "p-a", "window_minutes": 180, "limit": 60})
+    assert logs["source"] == ct.STREAM_THEN_HISTORY
+    msgs = [r["message"] for r in logs["latest"]]
+    before = [m for m in msgs if m.startswith("processed batch")]                      # the data directory's, before 01:00
+    streamed = [m for m in msgs if m.startswith("streamed line")]
+    assert len(before) == 6 and len(streamed) == 6 and msgs == before + streamed      # 00:00-00:50, then 01:00-01:50
+    events, _ = ct.call(ctx, "k8s_events", {"window_minutes": 1440})
+    assert events["by_reason"] == {"Started": 1, "OOMKilled": 1}     # history's Started at 00:30; not its Unhealthy at 01:50,
+    changes, _ = ct.call(ctx, "recent_changes", {"window_hours": 24})  # nor the streamed BackOff stamped 02:00:30
+    assert [c.get("description") for c in changes["latest"]] == [None, "streamed deploy"]
+    # the same store read as stream v1: everything from the data directory, as before
+    v1 = ct.Context.at_page(store, ds, index)
+    logs1, _ = ct.call(v1, "recent_logs", {"pod": "p-a", "window_minutes": 180, "limit": 60})
+    assert logs1["source"] == ct.HISTORY and not [r for r in logs1["latest"] if r["message"].startswith("streamed")]
+
+
+@pytest.mark.parametrize("page", [1, 2, 3])
+def test_on_stream_v2_no_tool_returns_anything_stamped_after_the_paging_time(ds, page):
+    store = v2_store("00:00")
+    index = next(i for i in store.paged() if store.pages[i]["page"] == page)
+    ctx = ct.Context.at_page(store, ds, index, stream_version=2)
+    for name, args in ALL_CALLS + [("baseline_comparison", {"series_id": world.LAG, "window_minutes": 360})]:
+        result, is_error = ct.call(ctx, name, args)
+        assert not is_error, (name, result)
+        late = [s for s in ISO.findall(ct.dumps(result)) if pd.Timestamp(s.replace("Z", "+00:00")) > ctx.now]
+        assert not late, (name, late)
+
+
+# ------------------------------------------------------------------------------------ baseline_comparison
+@pytest.fixture(scope="module")
+def seasonal_world(tmp_path_factory):
+    """Eight days of a daily pattern on the topic in-rate; the data directory's last day has the plain
+    pattern, the STREAM's last day has the in-rate doubled from 02:00 to 02:30."""
+    import json
+    import numpy as np
+    from sentinel_stream import wire
+    root = world.write_data_dir(tmp_path_factory.mktemp("seasonal"))
+    first = world.DAY - pd.Timedelta("7D")
+    minutes = pd.date_range(first, world.DAY + pd.Timedelta("1D"), freq="1min", inclusive="left")
+    pattern = 100 + 50 * np.sin(2 * np.pi * (minutes.hour * 60 + minutes.minute) / 1440)
+    noise = np.random.default_rng(3).normal(0, 2, len(minutes))
+    values = {s: np.arange(len(minutes), dtype=float) for s, *_ in world.SERIES}
+    values[world.IN_RATE] = pattern + noise
+    pd.DataFrame(values, index=minutes).to_csv(root / "metrics/metrics.csv.gz", compression="gzip")
+    topo = json.loads((root / "catalog/topology.json").read_text())
+    topo["time_range"]["start"] = first.isoformat()
+    (root / "catalog/topology.json").write_text(json.dumps(topo))
+    streamed = pd.Series(pattern + noise, index=minutes)[world.DAY:]
+    spike = (streamed.index >= world.at("02:00")) & (streamed.index < world.at("02:30"))
+    streamed[spike] *= 2
+    telemetry = [wire.metrics_message(t, {world.IN_RATE: v}) for t, v in streamed.items()]
+    alert = {"time": world.at("02:15").isoformat(), "target": world.IN_RATE, "detector": "seasonal", "score": 0.9, "direction": "up",
+             "explanation": "x", "measure": 1.0, "line": 0.5}
+    pages = [{"kind": k, "emitted_at": world.at("02:22").isoformat(), "page": 1, "page_id": "p1", "n_alerts": 1, "absorbed": [],
+              "alert": alert} for k in ("opened", "paged")]
+    store = ct.StreamStore.from_records(telemetry, pages, [])
+    return ct.Context.at_page(store, DataSource(root), 1)
+
+
+def test_baseline_comparison_scores_the_streamed_readings_against_the_same_time_on_earlier_days(seasonal_world):
+    r, is_error = ct.call(seasonal_world, "baseline_comparison", {"series_id": world.IN_RATE, "window_minutes": 60})
+    assert not is_error, r
+    buckets = {b["bucket"][11:16]: b for b in r["buckets"]}
+    assert list(buckets) == ["01:20", "01:25", "01:30", "01:35", "01:40", "01:45", "01:50", "01:55", "02:00", "02:05", "02:10", "02:15"]
+    for t in ("01:20", "01:40", "01:55"):                           # the normal pattern: expected is the pattern, z small
+        assert abs(buckets[t]["z"]) < 3 and buckets[t]["value"] == pytest.approx(buckets[t]["expected"], rel=0.05)
+    for t in ("02:00", "02:05", "02:10", "02:15"):                  # the streamed spike (the data directory has none)
+        assert buckets[t]["hot"] and buckets[t]["z"] > 6 and buckets[t]["value"] == pytest.approx(2 * buckets[t]["expected"], rel=0.05)
+    assert all(b["baseline_days"] == 5 for b in r["buckets"])        # day_type: the five previous weekdays
+    assert r["detector"] == "not routed" and r["history_mode"] == "day_type" and "note" in r
+    assert "02:20" not in buckets                                   # paged at 02:22: the 02:20 bucket is not complete
+
+
+def test_baseline_comparison_reads_only_up_to_the_paging_time(seasonal_world):
+    ctx = seasonal_world
+    early = ct.Context(**{**ctx.__dict__, "now": world.at("02:04"), "metrics": ctx.metrics.loc[:world.at("02:04")], "calls": []})
+    r, _ = ct.call(early, "baseline_comparison", {"series_id": world.IN_RATE, "window_minutes": 10})
+    assert [b["bucket"][11:16] for b in r["buckets"]] == ["01:55", "02:00"] and r["buckets"][-1]["hot"]
+
+
 def test_related_entities_follows_the_graph(store, ds):
     ctx = ctx_of(store, ds, 1)
     r, _ = ct.call(ctx, "related_entities", {"entity": world.LAG})

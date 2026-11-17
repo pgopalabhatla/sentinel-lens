@@ -98,6 +98,7 @@ class Dispatcher:
     topics: Topics = field(default_factory=Topics)
     concurrency: int = 3
     log: object = field(default=lambda line: print(line, file=sys.stderr, flush=True))
+    stream_version: int = 1           # 2: logs, events and changes are read from `telemetry` (context_tools)
 
     def __post_init__(self):
         self.store = StreamStore()
@@ -139,7 +140,7 @@ class Dispatcher:
                 self._notes_of.setdefault(key, set()).add(record["page_id"])
                 if record["page_id"] not in self.noted and record["page_id"] not in self.started:
                     self._catch_up()
-                    ctx = Context.at_page(self.store, self.ds, index, self.catalog)
+                    ctx = Context.at_page(self.store, self.ds, index, self.catalog, self.stream_version)
                     self.started.add(record["page_id"])
                     self._futures.append(self._pool.submit(self._investigate, ctx))
             elif record["kind"] == "merged":
@@ -212,6 +213,8 @@ def main(argv=None) -> int:
     ap.add_argument("--runs-dir", default=None, help="where transcripts go (default: triage.yaml, runs/)")
     ap.add_argument("--run-name", default=None, help="subfolder of the runs dir (default: the pages topic)")
     ap.add_argument("--until-end", action="store_true", help="handle the page-outs on the topic now, then exit")
+    ap.add_argument("--stream-version", type=int, default=1, choices=(1, 2),
+                    help="2: logs, Kubernetes events and changes are read from the telemetry topic")
     args = ap.parse_args(argv)
 
     topics = Topics(args.telemetry_topic, args.alerts_topic, args.pages_topic, args.triage_topic)
@@ -220,7 +223,8 @@ def main(argv=None) -> int:
     stopping = []
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stopping.append(1))
-    d = Dispatcher(KafkaTopics(args.bootstrap, topics), DataSource(args.data), agent.investigate, topics, args.concurrency)
+    d = Dispatcher(KafkaTopics(args.bootstrap, topics), DataSource(args.data), agent.investigate, topics, args.concurrency,
+                   stream_version=args.stream_version)
     d.log(f"{len(d.noted)} notes and {len(d.linked)} links already on {topics.triage!r}; model {config.model}")
     d.run(stop=lambda: bool(stopping), until_end=args.until_end)
     d.log(f"done: {d.investigated} investigated, {d.failed} failed")
