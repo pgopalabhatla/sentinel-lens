@@ -244,8 +244,6 @@ loop"; [docs/scope-v3.md](docs/scope-v3.md) for the scope.
 
 ## Next steps
 
-- **Real-time replay demo.** `DataSource.stream()` already replays the data minute by minute; a
-  small demo would show alerts and pages appearing as the clock moves.
 - **An agent with MCP tools.** The replay API mirrors the tools an investigating agent would call
   (metrics, logs, job history, recent changes). Root-cause analysis was cut from this version.
 - **A second generated world.** A dataset with a different incident schedule, to design and test
@@ -261,17 +259,21 @@ pip install -r requirements-dev.txt        # pandas, numpy, scipy, pyyaml, matpl
 export PYTHONPATH=.
 
 python -m sentinel_sim.generate --out data --seed 7   # create the dataset (about 20 s; data/ is not in git)
-pytest                                                # 200 tests, about 30 s; a few need data/ and are skipped without it
+pytest                                                # 213 tests, about 55 s; some need data/ and are skipped without it
 python examples/quickstart.py                         # tour of the replay API + the naive baseline on the test week
 ```
 
-Tests. The default `pytest` run skips the tests marked `slow`: 12 tests that replay the whole test
-week through the streaming engine (`sentinel_stream/`) and compare it with the batch pipeline.
+Tests. The default `pytest` run skips two groups. `slow`: 12 tests that replay the whole test week
+through the streaming engine (`sentinel_stream/`) and compare it with the batch pipeline, and one
+that regenerates the dataset and checks it is byte-identical to the evaluated one. `kafka`: 4 tests
+that run the engine through a real broker (see "Run the live stream"); they are skipped when no
+broker is running.
 
 ```bash
-pytest                          # default: 200 tests, about 30 s
-pytest -m slow                  # only the slow ones: 12 tests, about 75 s (needs data/)
-pytest -m "slow or not slow"    # everything: 212 tests, about 110 s
+pytest                          # default: 213 tests, about 55 s
+pytest -m slow                  # only the slow ones: 13 tests, about 95 s (needs data/)
+pytest -m kafka                 # through the broker: 4 tests, about 2 min 15 s (docker compose up -d first)
+pytest -m "slow or not slow"    # everything: 230 tests, about 5 min with the broker running
 ```
 
 Reproducing the numbers:
@@ -287,6 +289,44 @@ python scripts/score_feedback.py       # train: feedback loop, online replay
 The test week itself was run once with `python scripts/run_test_week.py --split test --run-once`.
 The runner now refuses to do that again: a further run needs `--post-hoc "<reason>"` and is saved
 to a separate file, never over the first result.
+
+## Run the live stream
+
+The same engine, fed from a Kafka topic instead of a function call. A publisher plays a generated
+world into the topic `telemetry` at a chosen speed; a consumer runs the engine on it and writes every
+alert to `alerts` and every page event to `pages`. Needs Docker.
+
+```bash
+pip install -r requirements-kafka.txt        # adds confluent-kafka, the Kafka client
+docker compose up -d                         # one Redpanda broker on 127.0.0.1:19092 with the three topics
+
+# a quiet world: 35 days, no incidents. The first 28 days are history, the last 7 are streamed.
+python -m sentinel_sim.generate --no-incidents --days 35 --seed 11 --out data_live
+
+# terminal 1: the consumer. Warms the engine up on the history before --start, then waits for telemetry.
+python -m sentinel_stream.consumer --data data_live --start 2026-10-26
+
+# terminal 2: the publisher. --speed 60 sends one simulated minute per second.
+python -m sentinel_stream.publisher --data data_live --start 2026-10-26 --speed 60
+
+# terminal 3: watch the pages arrive (use `alerts` instead of `pages` to see every alert)
+docker exec -it sentinel-redpanda rpk topic consume pages --offset start -f '%v\n'
+```
+
+What to expect. This world has no incidents, so every page is a false one: over the 7 days the
+system raises 14 alerts and pages 4 times. The first page is on Oct 28 at 21:29, which is 69 minutes
+in at `--speed 60`; with `--speed 600` it takes 7 minutes and the whole week 17. The consumer also
+prints a `PAGE ...` line for each page.
+
+Stopping and restarting. Stop the consumer (Ctrl-C, or kill it) and start it again with the same
+command: it continues where it stopped and writes no alert or page event twice. It commits a
+message's offset only after that message's outputs are on the topics, and after a restart it compares
+what the engine says with what is already written before sending anything (how and why:
+`sentinel_stream/consumer.py`). To start over from the beginning, delete the topics:
+`docker compose down -v && docker compose up -d`.
+
+`pytest -m kafka` checks this through the broker: the test week gives exactly the in-process engine's
+alerts and page events, also when the consumer is killed three times on the way.
 
 ## Where to read more
 
