@@ -1,0 +1,48 @@
+# One Kafka-compatible broker for the live stream (README, "Run the live stream").
+#
+#   docker compose up -d        broker on 127.0.0.1:19092, topics created
+#   docker compose down         stop it (add -v to also delete the topics' data)
+#
+# Redpanda instead of Apache Kafka: one container, no ZooKeeper or KRaft setup, starts in about two
+# seconds, and it speaks the Kafka protocol, so the Python client and everything in sentinel_stream/
+# is plain Kafka code. The image version is pinned so the tests always run against the same broker.
+services:
+  redpanda:
+    image: redpandadata/redpanda:v26.1.20
+    container_name: sentinel-redpanda
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container        # single node, no fsync tuning, small footprint
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      # two listeners: one for other containers (redpanda:9092), one for programs on this machine
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+    ports:
+      - "127.0.0.1:19092:19092"     # only reachable from this machine
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Runs once and exits: creates the three topics with ONE partition each.
+  #   telemetry  one partition, so metric minutes and DAG-run events stay in event-time order
+  #              (Kafka only orders messages inside a partition)
+  #   alerts     one partition, so a restarted consumer re-reads the alerts in the order they fired
+  #   pages      one partition, so "tail pages" shows page events in order
+  topics:
+    image: redpandadata/redpanda:v26.1.20
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["rpk", "topic", "create", "telemetry", "alerts", "pages",
+                 "--partitions", "1", "--replicas", "1", "--topic-config", "retention.ms=-1", "-X", "brokers=redpanda:9092"]
+    restart: "no"
+
+volumes:
+  redpanda-data:

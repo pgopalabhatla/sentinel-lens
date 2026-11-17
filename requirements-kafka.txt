@@ -1,0 +1,8 @@
+# Only for the live stream (sentinel_stream/publisher.py, consumer.py, broker.py) and `pytest -m kafka`.
+# The detectors, the in-process engine and the default tests do not need it.
+#
+# confluent-kafka: the Python wrapper around librdkafka, the reference Kafka client. Chosen because it
+# ships a ready-made wheel for Python 3.14 (nothing to compile), its calls are synchronous, and it has
+# manual offset commits, producer-set message timestamps and offset lookup by time.
+-r requirements-dev.txt
+confluent-kafka>=2.16.1
