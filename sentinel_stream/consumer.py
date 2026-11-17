@@ -192,9 +192,14 @@ def run(config: Config, stop=lambda: False) -> Processor:
         pages_log = broker.read_topic(bootstrap, config.pages)
         processor = recover(DataSource(config.data), config.start, alerts_log, pages_log, last, config.history_start)
         clock = processor.position[0]
+        # The end is read BEFORE the lookup. If the lookup then finds nothing stamped `clock` or later,
+        # everything below that end is older than `clock`, so starting there loses nothing even when
+        # the publisher is writing at this very moment (read the other way round, messages that
+        # arrive between the two calls would be jumped over).
+        end = consumer.get_watermark_offsets(tp, timeout=10, cached=False)[1]
         offset = broker.first_offset_at_or_after(consumer, config.telemetry, clock)
-        if offset is None:                    # nothing stamped `clock` or later yet: wait at the end
-            offset = consumer.get_watermark_offsets(tp, timeout=10)[1]
+        if offset is None:
+            offset = end
         consumer.assign([TopicPartition(config.telemetry, broker.PARTITION, offset)])
         log(f"engine warm-started at {clock:%Y-%m-%d %H:%M:%S} from {config.data}; "
             f"{len(alerts_log)} alerts and {len(pages_log)} page events already written, "

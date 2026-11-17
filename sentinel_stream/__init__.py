@@ -12,6 +12,15 @@ The same engine behind Kafka (README, "Run the live stream"):
 
 Only broker.py and the two CLIs' Kafka loops need the confluent-kafka package (requirements-kafka.txt);
 importing this package does not.
+
+Failures injected into the live stream (README, "Inject a failure"; docs/live-protocol.md):
+
+    scenarios_live.py   seven failure scenarios as lists of effects on named series
+    injector.py         applies them to what the publisher sends, and records what was injected  (CLI)
+    live_score.py       were the injections paged for, and how many pages were for nothing       (CLI)
+
+The injection side is kept apart from the detection side: nothing the consumer loads imports these
+three modules or knows their topics (tests/test_live_isolation.py).
 """
 from sentinel_stream.engine import FROZEN_DEMOTED_GROUPS, StreamEngine
 from sentinel_stream.events import AlertEvent, PageEvent, RunFinished, RunStarted
