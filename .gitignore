@@ -7,3 +7,5 @@ __pycache__/
 data/
 # quiet world for the live stream: python -m sentinel_sim.generate --no-incidents --days 35 --seed 11 --out data_live
 data_live/
+# triage agent transcripts (sentinel_stream/investigator.py)
+runs/
