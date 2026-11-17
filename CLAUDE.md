@@ -41,6 +41,7 @@ Every anomaly must carry a score (0-1), a direction, and a plain-language explan
 - NEVER import or read `labels/` from detector code. Labels are for evaluation only (`sentinel_sim.evaluate`).
 - Do NOT read test-split labels or tune on the test split until the final evaluation.
 - Tune and iterate on the train split only.
+- Never regenerate or overwrite data/ unless explicitly asked.
 
 ## Commands
 ```bash

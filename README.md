@@ -335,7 +335,7 @@ pip install -r requirements-kafka.txt        # adds confluent-kafka, the Kafka c
 docker compose up -d                         # one Redpanda broker on 127.0.0.1:19092 with its topics
 
 # a quiet world: 35 days, no incidents. The first 28 days are history, the last 7 are streamed.
-python -m sentinel_sim.generate --no-incidents --days 35 --seed 11 --out data_live
+python -m sentinel_stream.quiet_world --days 35 --seed 11 --out data_live
 
 # terminal 1: the consumer. Warms the engine up on the history before --start, then waits for telemetry.
 python -m sentinel_stream.consumer --data data_live --start 2026-10-26

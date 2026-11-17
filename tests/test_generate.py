@@ -1,20 +1,19 @@
-"""The generator: the evaluated dataset must never change, and the quiet world must be quiet.
+"""The generator: the evaluated dataset must never change.
 
 `python -m sentinel_sim.generate --out data --seed 7` is the dataset every number in docs/ was
-measured on. The `--no-incidents` option was added to the generator afterwards (for the live stream),
-so the first test pins the content of every seed-7 file: if it fails, the generator no longer
+measured on, so this test pins the content of every seed-7 file: if it fails, the generator no longer
 reproduces the evaluated dataset, and the change that caused it must be undone, not the hashes updated.
 
-The hashes were taken from the generator as it was before the option existed, and are equal to the
+The hashes were taken from the generator as it is at the `pre-test-freeze` tag and are equal to the
 hashes of the data/ directory the test week was run on. The two .gz files are hashed after
 decompression, because a gzip header holds the time the file was written.
+
+The quiet world for the live stream is made outside sentinel_sim/ (tests/test_quiet_world.py).
 """
 import gzip
 import hashlib
-import json
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from sentinel_sim import generate
@@ -56,41 +55,7 @@ def test_default_generation_is_byte_identical_to_the_evaluated_dataset(tmp_path)
     assert content_hashes(tmp_path / "data") == SEED_7_SHA256
 
 
-@pytest.fixture(scope="module")
-def quiet(tmp_path_factory):
-    out = tmp_path_factory.mktemp("quiet") / "data"
-    generate.main(["--no-incidents", "--days", "8", "--seed", "3", "--out", str(out)])
-    return out
-
-
-def test_no_incidents_writes_empty_labels_and_no_changes(quiet):
-    assert json.loads((quiet / "labels/incidents.json").read_text()) == []
-    windows = pd.read_csv(quiet / "labels/anomaly_windows.csv")
-    assert len(windows) == 0 and list(windows.columns) == generate.ANOMALY_WINDOW_COLUMNS
-    assert (quiet / "changes/changes.jsonl").read_text() == ""
-    topology = json.loads((quiet / "catalog/topology.json").read_text())
-    assert topology["splits"] == {}                       # the splits belong to the scenario calendar
-    assert topology["time_range"] == {"start": "2026-09-28T00:00:00Z", "end": "2026-10-06T00:00:00Z", "step": "1m"}
-
-
-def test_no_incidents_world_has_the_same_series_and_a_reading_every_minute(quiet):
-    from sentinel_sim.replay import DataSource, load_labels
-
-    ds = DataSource(quiet)
-    m = ds.query(list(ds.series().series_id), start="2026-09-28", end="2026-10-06")
-    assert m.shape == (8 * 1440, 164)
-    assert len(ds.job_runs(window="30D")) > 8 * 24        # the DAGs still run on schedule
-    incidents, windows = load_labels(quiet)               # the scorer's loader reads the empty labels
-    assert incidents == [] and windows.empty
-    # nothing that only a scenario does: no restarts, no under-replicated partitions
-    restarts = m[[c for c in m.columns if c.startswith("kube_pod_container_status_restarts_total|")]]
-    assert (restarts.ffill().diff().fillna(0) == 0).all().all()
-    assert (m["kafka_under_replicated_partitions|kafka-ingest"] == 0).all()
-
-
-def test_other_lengths_need_no_incidents(tmp_path):
-    with pytest.raises(SystemExit, match="--no-incidents"):
+def test_the_generator_only_makes_28_days(tmp_path):
+    with pytest.raises(SystemExit, match="28 days"):
         generate.main(["--days", "35", "--out", str(tmp_path / "x")])
-    with pytest.raises(SystemExit, match="at least 8"):
-        generate.main(["--no-incidents", "--days", "7", "--out", str(tmp_path / "x")])
     assert not (tmp_path / "x").exists()

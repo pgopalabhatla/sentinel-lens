@@ -614,3 +614,25 @@ Choices of mine beyond what was asked, to be able to defend or drop:
 Relation to the live week: this was added AFTER the single scripted run and does not touch its result. The named scenarios are unchanged: with the 14 scheduled commands, the code as it is now and the code at the commit the result was run from (`1f2b327`) give a byte-identical telemetry stream and answer key (same SHA-256 over all 10,445 messages and 28 records; readings only, no engine). The scorer's report has two more columns and one more table than the saved result file, which stays as the runner wrote it.
 
 Test runs on this branch, all after the last code change: `pytest` 303 passed in 56 s; `pytest -m kafka` 8 passed in 4 min 3 s with the broker running; `pytest -m slow` 13 passed in 99 s.
+
+## Nov 17, the quiet world moved out of sentinel_sim/ (live-week-1 unchanged)
+
+The `--no-incidents` option is gone from `sentinel_sim/generate.py`, which is back to main's version, byte for byte. The quiet world is now made by `python -m sentinel_stream.quiet_world --days 35 --seed 11 --out data_live`. It calls the generator's own functions in the generator's order without `register_all` (the scenario calendar), then corrects the two outputs that belong to the calendar: no splits in topology.json, an empty anomaly_windows.csv with its header. `sentinel_sim/` is not modified. Why: the runner's freeze check covers `sentinel_sim/`, and with the option inside it the check read `frozen_code_identical_to_tag: False` (Nov 16 entry). It now reads **True**.
+
+One addition: the module refuses to write into a directory whose topology.json has splits, i.e. an evaluated dataset like `data/`. The generator's `write` deletes the output directory first, and on Nov 16 a stray command rewrote `data/` (identical content, by luck). CLAUDE.md now also says: never regenerate or overwrite data/ unless explicitly asked.
+
+Checks that live-week-1 still stands (nothing in `docs/results/` was rewritten):
+
+| check | result |
+|---|---|
+| the quiet world regenerated into a scratch directory (not over `data_live`), content hashes of all 18 files | identical to the `data_live` the week was run on |
+| `data/` content hashes before and after this work | unchanged |
+| live-week-1 re-scored from its saved `live-week-1-answer_key` and `live-week-1-pages` topics, entity graph from the regenerated world | Overall, By scenario and False page-outs tables identical to docs/results/live-week-1.md; per-injection rows identical apart from the two columns added later (severity, intent: "-") |
+| the same week with nothing injected, recomputed in-process on the regenerated world | the same 4 page-outs at the same times |
+| seed-7 generation (`pytest -m slow tests/test_generate.py`) | byte-identical to the evaluated dataset |
+
+So the result is 12 of 14 detected, median 12 min, 4 false page-outs, 0.57 a day, as before.
+
+`docs/live-protocol.md` still gives the old command for `data_live`. It is the pre-registered protocol and is left as committed; the new command makes the same files. The runner's result header now names the new module (it only matters if the runner were run again, which it refuses to do).
+
+Tests: the quiet-world tests moved from `tests/test_generate.py` to `tests/test_quiet_world.py`, plus two new ones (refuses to overwrite a dataset with splits; may overwrite a quiet world). `pytest` 306 passed in 60 s; `pytest -m slow tests/test_generate.py` 1 passed.

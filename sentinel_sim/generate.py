@@ -1,14 +1,6 @@
 """Generate the Sentinel Lens synthetic dataset.
 
     python -m sentinel_sim.generate --out data --seed 7 --days 28
-    python -m sentinel_sim.generate --no-incidents --days 35 --seed 11 --out data_live
-
-The first line is the evaluated dataset and its output must never change (tests/test_generate.py pins
-the hashes of the seed-7 files). `--no-incidents` makes a quiet world for the live stream: the same
-platform, the same daily and weekly rhythm, the same background noise (log lines, single-reading
-blips, readiness flaps, the odd retried task), but the scenario calendar is skipped, so there are no
-incidents and no changes, and the incident labels are empty. Only in that mode may `--days` differ
-from 28, because the calendar places its scenarios on fixed days of a 28-day period.
 """
 from __future__ import annotations
 
@@ -96,13 +88,7 @@ def _clean(rec):
     return {k: v for k, v in rec.items() if not k.startswith("_")}
 
 
-ANOMALY_WINDOW_COLUMNS = ["incident_id", "split", "actionable", "series_id", "start", "end", "direction"]
-MIN_DAYS = 8          # single-reading blips are placed after the first 7 days, so there must be an 8th
-
-
-def write(ctx, out: Path, blips, calendar: bool = True):
-    """calendar=False (--no-incidents): the warm-up / train / test splits belong to the scenario
-    calendar, so none are written, and the label files are written empty but with their headers."""
+def write(ctx, out: Path, blips):
     if out.exists():
         shutil.rmtree(out)
     for d in ("catalog/mappings", "metrics", "logs", "k8s", "jobs", "changes", "labels"):
@@ -141,7 +127,7 @@ def write(ctx, out: Path, blips, calendar: bool = True):
             "dags": DAGS, "images": BASE_IMAGES, "spark_base_config": SPARK_BASE_CONFIG,
             "time_range": {"start": ctx.iso(0), "end": ctx.iso(ctx.N), "step": "1m"},
             "splits": {"warmup": [ctx.iso(0), ctx.iso(7 * 1440)], "train": [ctx.iso(7 * 1440), ctx.iso(21 * 1440)],
-                       "test": [ctx.iso(21 * 1440), ctx.iso(ctx.N)]} if calendar else {}}
+                       "test": [ctx.iso(21 * 1440), ctx.iso(ctx.N)]}}
     (out / "catalog/topology.json").write_text(json.dumps(topo, indent=2, default=str))
 
     # ---- logs / events / changes
@@ -189,9 +175,7 @@ def write(ctx, out: Path, blips, calendar: bool = True):
     (out / "labels/incidents.json").write_text(json.dumps(inc, indent=2))
     rows = [{"incident_id": i["incident_id"], "split": i["split"], "actionable": i["actionable"], **s}
             for i in inc for s in i["key_signals"]]
-    # with no incidents there are no rows to take the columns from, so the header is given
-    pd.DataFrame(rows, columns=None if rows else ANOMALY_WINDOW_COLUMNS).to_csv(
-        out / "labels/anomaly_windows.csv", index=False)
+    pd.DataFrame(rows).to_csv(out / "labels/anomaly_windows.csv", index=False)
     pd.DataFrame(blips).to_csv(out / "labels/noise_blips.csv", index=False)
     return df
 
@@ -201,19 +185,13 @@ def main(argv=None):
     ap.add_argument("--out", default="data")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--days", type=int, default=28)
-    ap.add_argument("--no-incidents", action="store_true",
-                    help="skip the scenario calendar: no incidents, no changes, empty incident labels; "
-                         "--days may then differ from 28")
     args = ap.parse_args(argv)
-    if args.days != 28 and not args.no_incidents:
-        raise SystemExit("Scenario calendar assumes 28 days (warm-up 7, train 14, test 7). "
-                         "Other lengths need --no-incidents.")
-    if args.days < MIN_DAYS:
-        raise SystemExit(f"--days must be at least {MIN_DAYS}.")
+    if args.days != 28:
+        raise SystemExit("Scenario calendar assumes 28 days (warm-up 7, train 14, test 7).")
 
     ctx = core.Ctx(seed=args.seed, days=args.days)
     core.baseline(ctx)
-    posts = [] if args.no_incidents else register_all(ctx)
+    posts = register_all(ctx)
     core.build_runs(ctx)
     core.runs_to_series(ctx)
     core.kafka_physics(ctx)
@@ -222,7 +200,7 @@ def main(argv=None):
     noise_logs(ctx)
     blips = outliers(ctx)
     core.finalize(ctx)
-    df = write(ctx, Path(args.out), blips, calendar=not args.no_incidents)
+    df = write(ctx, Path(args.out), blips)
     print(f"series={df.shape[1]} minutes={df.shape[0]} logs={len(ctx.logs)} events={len(ctx.events)} "
           f"changes={len(ctx.changes)} dag_runs={len(ctx.dag_runs)} spark_apps={len(ctx.spark_apps)} "
           f"incidents={len(ctx.incidents)}")

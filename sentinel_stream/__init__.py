@@ -9,6 +9,7 @@ The same engine behind Kafka (README, "Run the live stream"):
     consumer.py    `telemetry` -> engine -> topics `alerts` and `pages`;        (CLI)
                    commit after output, restart without duplicates
     broker.py      the few Kafka calls they share
+    quiet_world.py the world they stream: the simulator with no incidents, of any length  (CLI)
 
 Only broker.py and the two CLIs' Kafka loops need the confluent-kafka package (requirements-kafka.txt);
 importing this package does not.
