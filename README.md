@@ -293,21 +293,21 @@ pip install -r requirements-dev.txt        # pandas, numpy, scipy, pyyaml, matpl
 export PYTHONPATH=.
 
 python -m sentinel_sim.generate --out data --seed 7   # create the dataset (about 20 s; data/ is not in git)
-pytest                                                # 266 tests, about 55 s; some need data/ or data_live/ and are skipped without it
+pytest                                                # 303 tests, about 55 s; some need data/ or data_live/ and are skipped without it
 python examples/quickstart.py                         # tour of the replay API + the naive baseline on the test week
 ```
 
 Tests. The default `pytest` run skips two groups. `slow`: 12 tests that replay the whole test week
 through the streaming engine (`sentinel_stream/`) and compare it with the batch pipeline, and one
-that regenerates the dataset and checks it is byte-identical to the evaluated one. `kafka`: 7 tests
+that regenerates the dataset and checks it is byte-identical to the evaluated one. `kafka`: 8 tests
 that run the engine through a real broker (see "Run the live stream"); they are skipped when no
 broker is running.
 
 ```bash
-pytest                          # default: 266 tests, about 55 s
+pytest                          # default: 303 tests, about 55 s
 pytest -m slow                  # only the slow ones: 13 tests, about 95 s (needs data/)
-pytest -m kafka                 # through the broker: 4 tests, about 2 min 15 s (docker compose up -d first)
-pytest -m "slow or not slow"    # everything: 230 tests, about 5 min with the broker running
+pytest -m kafka                 # through the broker: 8 tests, about 4 min (docker compose up -d first)
+pytest -m "slow or not slow"    # everything: 324 tests, about 7 min with the broker running
 ```
 
 Reproducing the numbers:
@@ -332,7 +332,7 @@ alert to `alerts` and every page event to `pages`. Needs Docker.
 
 ```bash
 pip install -r requirements-kafka.txt        # adds confluent-kafka, the Kafka client
-docker compose up -d                         # one Redpanda broker on 127.0.0.1:19092 with the three topics
+docker compose up -d                         # one Redpanda broker on 127.0.0.1:19092 with its topics
 
 # a quiet world: 35 days, no incidents. The first 28 days are history, the last 7 are streamed.
 python -m sentinel_sim.generate --no-incidents --days 35 --seed 11 --out data_live
@@ -373,7 +373,20 @@ python -m sentinel_stream.injector list                                    # the
 python -m sentinel_stream.injector inject trino_heavy_query -p magnitude=1.0 -p duration_min=40
 python -m sentinel_stream.injector stop <id>                               # end it before its duration is over
 python -m sentinel_stream.live_score --data data_live                      # detected? time to detect? false pages?
+
+# not a named scenario: your own effects (series, add|mult, flat|ramp|decay, magnitude, minutes)
+python -m sentinel_stream.injector custom \
+    -e "jvm_heap_used_ratio|kafka-0" add ramp 0.2 90 \
+    -e "kafka_produce_request_p99_ms|kafka-ingest" mult flat 4 30 \
+    --severity subtle --intent "heap creeping up on one broker"
 ```
+
+Your own effects are exact (flat holds the magnitude, ramp reaches it at the end, decay starts at
+it) and are checked against what the series can physically be: a ratio stays in 0-1, memory and CPU
+stay under the pod's limit, counts are whole and not negative, a counter only goes up. An effect that
+would break its limit on the reading it meets is rejected, with the reason, in the answer key; the
+others in the same command are applied. `--severity` (noticeable or subtle) and `--intent` are your
+own words about the injection: the scorer reports by them and never uses them to decide a match.
 
 The scorer reads only `answer_key` and `pages`. An injection counts as detected when a page that
 pages between its start and 30 minutes after its stop holds an alert on one of its target entities

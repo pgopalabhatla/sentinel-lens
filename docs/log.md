@@ -585,3 +585,32 @@ Other things worth knowing:
 - A start-up race in the consumer was found and fixed while building the runner: it looked up its start offset and, finding nothing yet, then asked for the end of the topic; a publisher writing between the two calls would have made it jump over messages. It now reads the end first. No effect on what it emits (the Kafka tests pass unchanged).
 - A consumer restart during an injected week is not equivalent to an uninterrupted run: the engine is rebuilt from the data directory, which does not hold the injected readings. The scripted run used one consumer from start to end.
 - The run's topics (`live-week-1-*`) are still on the local broker for inspection; `docker compose down -v` removes them.
+
+## Nov 17, generic injections (added after the live week was run)
+
+A control command can now carry a list of primitive effects instead of a named scenario: `{"cmd": "inject", "effects": [{"series_id", "op": add | mult, "shape": flat | ramp | decay, "magnitude", "start", "duration_min"}, ...]}`. Each effect has its own start and duration. They are exact, with no jitter and no easing: flat holds the magnitude, ramp reaches it at the end, decay starts at it and falls off as exp(-4 x).
+
+Validation, by the catalog's unit (`Injector.limits_of`):
+
+| unit | rule |
+|---|---|
+| ratio | stays in [0, 1] |
+| bytes (memory), cores | 0 up to the pod's limit |
+| ms/s (GC time) | 0 to 1000 |
+| partitions, queries, tasks | whole numbers >= 0: an added amount must be whole, results are rounded |
+| count (the `*_total` series) | a counter: only add, a whole positive number, flat or ramp; the steps stay after the stop |
+| everything else (latency, rates, lag) | >= 0 |
+
+An effect is rejected in one of two moments. At once, if it can never be valid: unknown series, a ratio moved by more than 1, a fractional number of queries, a counter multiplied or decaying. When the injection begins, if its full size would leave the limits on the reading the series has at that moment ("the reading is 0.5; + 0.6 would be 1.1, above its limit of 1"). Rejected effects are not applied and are listed with their reasons in the injection's `started` record; the valid ones of the same command are applied. A command with no valid effect, or any command the publisher cannot carry out, gets a `rejected` record. Readings move after the injection has begun, so while an effect runs its result is also held inside the limits, and the `stopped` record counts the minutes in which that was needed.
+
+The answer key's `started` record for a generic injection has `"scenario": "custom"` and lists every effect as applied, with its resolved start and stop. Any inject command, generic or named, can carry `intent` (free text) and `severity` (noticeable | subtle). They are the caller's words. The scorer shows them (a table by severity, two columns per injection) and never reads them when matching: a test scores the same pages under different severities and intents and gets the same verdicts.
+
+Choices of mine beyond what was asked, to be able to defend or drop:
+
+- CPU up to the pod's limit and GC time up to 1000 ms/s are checked too; the request named ratios, memory, counts and latency.
+- The check against the reading is made once, when the injection begins, also for effects of the same command that start later; after that the result is held at the limit instead of being rejected halfway.
+- Rejections are reported in the answer key (and in the publisher's log). It is the only place the sender of a command can read them. The scorer ignores `rejected` records.
+
+Relation to the live week: this was added AFTER the single scripted run and does not touch its result. The named scenarios are unchanged: with the 14 scheduled commands, the code as it is now and the code at the commit the result was run from (`1f2b327`) give a byte-identical telemetry stream and answer key (same SHA-256 over all 10,445 messages and 28 records; readings only, no engine). The scorer's report has two more columns and one more table than the saved result file, which stays as the runner wrote it.
+
+Test runs on this branch, all after the last code change: `pytest` 303 passed in 56 s; `pytest -m kafka` 8 passed in 4 min 3 s with the broker running; `pytest -m slow` 13 passed in 99 s.
