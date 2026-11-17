@@ -18,12 +18,18 @@ two steps and the loop has to stop cleanly when one runs out:
 
 "Tools switched off" is `tool_choice: none` on the next request: the agent must answer in text.
 
-The note is JSON with page_id, verdict (real | noise | unsure), confidence, suspected_cause,
-affected_entities, evidence, next_step. It is validated (`validate_note`): the verdict and confidence
-in range, every affected entity one that exists in the entity graph, and every piece of evidence citing
-a tool call this agent actually made (the agent sees each result labelled with its call id, c1, c2, ...).
-An invalid note is sent back once with the reasons, tools off; if the second answer is invalid too, or
-a budget ends the run with no valid note, the note says `unsure` with confidence 0 and `valid: false`.
+The note is JSON with page_id, needs_human (yes | no | unsure), confidence, cause {category: change |
+capacity | failure | external | unknown, description}, impact {degraded: some of sla, lag, errors,
+latency, or ["none"]; description; evidence: call ids}, affected_entities, evidence, next_step. It is
+validated (`validate_note`): every value in range, every affected entity one that exists in the entity
+graph, and every piece of evidence citing a tool call this agent actually made (the agent sees each
+result labelled with its call id, c1, c2, ...). An invalid note is sent back once with the reasons,
+tools off; if the second answer is invalid too, or a budget ends the run with no valid note, the note
+says needs_human `unsure` with confidence 0 and `valid: false`.
+
+Follow-up. `investigate(ctx, previous=note)` is a fresh agent on a Context cut at a LATER time (the
+dispatcher uses paging time + `follow_up_minutes` when the first note said "unsure"). It is told what
+the first note said and when the page went out; its tools see nothing after the later time.
 
 The note is advisory: nothing reads it to change a page, a detector or a threshold.
 
@@ -47,35 +53,41 @@ from sentinel_stream import context_tools
 from sentinel_stream.context_tools import Context
 
 CONFIG_PATH = Path(__file__).with_name("triage.yaml")
-VERDICTS = ("real", "noise", "unsure")
-NOTE_FIELDS = ("page_id", "verdict", "confidence", "suspected_cause", "affected_entities", "evidence", "next_step")
+ANSWERS = ("yes", "no", "unsure")
+CAUSES = ("change", "capacity", "failure", "external", "unknown")
+IMPACTS = ("sla", "lag", "errors", "latency", "none")
+NOTE_FIELDS = ("page_id", "needs_human", "confidence", "cause", "impact", "affected_entities", "evidence", "next_step")
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 SYSTEM = """You are the on-call triage assistant for a data platform: Kafka, Spark, Airflow, Flink and Trino on Kubernetes.
-The alerting system has just paged an engineer. Investigate this ONE page with the read-only tools and write a short triage note that the engineer reads before acting. The note is advice; it does not change the page.
+The alerting system has paged an engineer. Investigate this ONE page with the read-only tools and write a short triage note that the engineer reads before acting. The note is advice; it does not change the page.
 
-You see everything up to the moment the page went out and nothing later. Every tool result says its source. Every tool result is labelled with a call id (c1, c2, ...).
+You see everything up to the time given in the request and nothing later. Every tool result says its source. Every tool result is labelled with a call id (c1, c2, ...).
 
-Verdicts:
-- real: the page points to a genuine problem that needs an engineer's attention now: something failing or not running, a sustained degradation, a resource running out.
-- noise: nothing an engineer needs to act on, AND you found a positive benign explanation for the page in the evidence: a planned change, a scheduled job, a known burst, maintenance.
-- unsure: the evidence does not settle it, or it contradicts itself. Say unsure rather than guess.
+The question to answer is needs_human: does an engineer need to look at this now?
+- yes: something is degraded now or is heading there (an SLA at risk, lag growing, errors, latency, a resource running out, a job not running), whatever the cause.
+- no: there is no ongoing impact AND the cause is expected and bounded (for example a burst that is already subsiding, or maintenance inside its announced window).
+- unsure: the evidence conflicts, or what is needed to decide is missing.
 
-Two rules for the verdict:
-- Call a page noise only with a positive benign explanation that you found in the evidence and cite. If supporting evidence is missing, or the evidence conflicts, the verdict is unsure, not noise.
+Rules:
+- An explanation, including a planned change, does not make a page harmless. Knowing why something happens is not the same as it being fine. Answer "no" only when there is no ongoing impact AND the cause is expected and bounded. Conflicting or missing evidence means "unsure".
 - The page's alerts already compare each reading with the same time of day on similar earlier days, so the normal daily and weekly traffic pattern is already accounted for. To blame traffic or load, show that the traffic itself is abnormal for this time of day (baseline_comparison on the traffic series) AND that the change in traffic is large enough to explain the size of the effect.
+
+Cause categories: change (a deploy, a configuration change or another deliberate change), capacity (load or demand beyond what is provisioned), failure (a component failing: a crash, an out-of-memory kill, a bug, a stuck process), external (something outside the platform's own components, such as a client, a user's query or upstream data), unknown.
+Impact: what is degraded NOW, from sla, lag, errors, latency; or ["none"] when nothing is. Cite the tool calls that show it.
 
 How to work: start with get_page. Look at the paged series and its neighbours over a window long enough to see what is normal for them; baseline_comparison shows how a series compares with what is usual for this time of day. A real problem usually shows on more than one signal; look for corroboration and for contradiction. You have at most 15 tool calls and two minutes; most pages need 4 to 8 calls. Do not repeat a call.
 
 When you are done, reply with ONLY a JSON object (no prose before or after it, no code fence):
 {"page_id": "<the page_id>",
- "verdict": "real" | "noise" | "unsure",
+ "needs_human": "yes" | "no" | "unsure",
  "confidence": <a number from 0 to 1>,
- "suspected_cause": "<one or two sentences: what is going on and why you think so>",
+ "cause": {"category": "change" | "capacity" | "failure" | "external" | "unknown", "description": "<one or two sentences: what is going on and why you think so>"},
+ "impact": {"degraded": ["sla" | "lag" | "errors" | "latency", ...] or ["none"], "description": "<what is degraded now, or why nothing is>", "evidence": ["<call ids that show it>", ...]},
  "affected_entities": ["<kind:name as written in the tool results>", ...],
  "evidence": [{"tool_call_id": "<a call id such as c3>", "finding": "<what that result shows>"}, ...],
  "next_step": "<the first thing the engineer should check or do>"}
-For real or noise, cite at least one tool call as evidence."""
+For yes or no, cite at least one tool call as evidence."""
 
 
 # ------------------------------------------------------------------------------------------ config
@@ -96,6 +108,7 @@ class Config:
     budget: Budget = field(default_factory=Budget)
     runs_dir: str = "runs"
     prices_per_mtok: dict = field(default_factory=dict)
+    follow_up_minutes: float | None = 10.0     # re-investigate an "unsure" page this long after it paged; None: never
 
     @classmethod
     def load(cls, path=CONFIG_PATH, **overrides) -> "Config":
@@ -107,7 +120,7 @@ class Config:
     def public(self) -> dict:
         """The settings as saved in a transcript (there is no secret in them)."""
         return {"model": self.model, "effort": self.effort, "max_tokens_per_call": self.max_tokens_per_call,
-                "fallbacks": self.fallbacks, "budget": vars(self.budget)}
+                "fallbacks": self.fallbacks, "budget": vars(self.budget), "follow_up_minutes": self.follow_up_minutes}
 
 
 def anthropic_create(config: Config):
@@ -166,14 +179,43 @@ def validate_note(note: dict, page_id: str, call_ids: set, entities) -> list:
         errors.append(f"unknown fields: {extra}")
     if "page_id" in note and note["page_id"] != page_id:
         errors.append(f"page_id must be {page_id!r}")
-    if "verdict" in note and note["verdict"] not in VERDICTS:
-        errors.append(f"verdict must be one of {list(VERDICTS)}")
+    if "needs_human" in note and note["needs_human"] not in ANSWERS:
+        errors.append(f"needs_human must be one of {list(ANSWERS)}")
     c = note.get("confidence")
     if "confidence" in note and not (isinstance(c, (int, float)) and not isinstance(c, bool) and 0 <= c <= 1):
         errors.append("confidence must be a number from 0 to 1")
-    for k in ("suspected_cause", "next_step"):
-        if k in note and not (isinstance(note[k], str) and note[k].strip()):
-            errors.append(f"{k} must be a non-empty string")
+    if "next_step" in note and not (isinstance(note["next_step"], str) and note["next_step"].strip()):
+        errors.append("next_step must be a non-empty string")
+    cause = note.get("cause")
+    if "cause" in note:
+        if not (isinstance(cause, dict) and set(cause) == {"category", "description"}):
+            errors.append('cause must be {"category", "description"}')
+        else:
+            if cause["category"] not in CAUSES:
+                errors.append(f"cause.category must be one of {list(CAUSES)}")
+            if not (isinstance(cause["description"], str) and cause["description"].strip()):
+                errors.append("cause.description must be a non-empty string")
+    impact = note.get("impact")
+    if "impact" in note:
+        if not (isinstance(impact, dict) and set(impact) == {"degraded", "description", "evidence"}):
+            errors.append('impact must be {"degraded", "description", "evidence"}')
+        else:
+            deg = impact["degraded"]
+            if not (isinstance(deg, list) and deg and all(d in IMPACTS for d in deg)):
+                errors.append(f"impact.degraded must be a non-empty list of {list(IMPACTS)}")
+            elif "none" in deg and len(deg) > 1:
+                errors.append('impact.degraded: "none" cannot go with anything else')
+            if not (isinstance(impact["description"], str) and impact["description"].strip()):
+                errors.append("impact.description must be a non-empty string")
+            cited = impact["evidence"]
+            if not (isinstance(cited, list) and all(isinstance(x, str) for x in cited)):
+                errors.append("impact.evidence must be a list of call ids")
+            else:
+                bad = [x for x in cited if x not in call_ids]
+                if bad:
+                    errors.append(f"impact.evidence cites tool calls that were not made: {bad}; made: {sorted(call_ids)}")
+                if not cited and isinstance(deg, list) and deg and deg != ["none"]:
+                    errors.append("impact.evidence must cite the calls that show what is degraded")
     ents = note.get("affected_entities")
     if "affected_entities" in note:
         if not isinstance(ents, list) or not all(isinstance(e, str) for e in ents):
@@ -191,9 +233,23 @@ def validate_note(note: dict, page_id: str, call_ids: set, entities) -> list:
             bad = [e["tool_call_id"] for e in ev if e["tool_call_id"] not in call_ids]
             if bad:
                 errors.append(f"evidence cites tool calls that were not made: {bad}; made: {sorted(call_ids)}")
-            if not ev and note.get("verdict") in ("real", "noise"):
-                errors.append("a real or noise verdict needs at least one piece of evidence")
+            if not ev and note.get("needs_human") in ("yes", "no"):
+                errors.append("a yes or no answer needs at least one piece of evidence")
     return errors
+
+
+def request_text(ctx: Context, previous: dict | None = None) -> str:
+    """The first user turn. A follow-up is told when the page went out, what time it is now and what the
+    first note said."""
+    page = f"Page {ctx.original_page or ctx.page} (page_id {ctx.page_id}) paged at {ctx.paged_at:%Y-%m-%d %H:%M} UTC."
+    if previous is None:
+        return f"{page} Investigate it."
+    minutes = (ctx.now - ctx.paged_at).total_seconds() / 60
+    merged = f" Since then it has been merged into page {ctx.page}." if ctx.original_page and ctx.page != ctx.original_page else ""
+    first = {k: previous.get(k) for k in ("needs_human", "confidence", "cause", "impact", "next_step")}
+    return (f"{page}{merged} This is a FOLLOW-UP: it is now {ctx.now:%Y-%m-%d %H:%M} UTC, {minutes:.0f} minutes later, and your "
+            f"tools see everything up to now. An investigation at paging time could not decide; its note was:\n"
+            f"{json.dumps(first)}\nInvestigate again with what is known now and write a new note for page_id {ctx.page_id}.")
 
 
 def _dump(block) -> dict:
@@ -223,13 +279,14 @@ class Investigator:
             self._create = anthropic_create(self.config)
         return self._create
 
-    def investigate(self, ctx: Context) -> dict:
+    def investigate(self, ctx: Context, previous: dict | None = None) -> dict:
+        """One investigation of ctx's page. previous: the first note, when this is its follow-up (ctx is
+        then cut at the later time)."""
         cfg, budget = self.config, self.config.budget
         began = self.clock()
         deadline = began + budget.max_seconds
         tools = context_tools.definitions()
-        messages = [{"role": "user", "content": f"Page {ctx.page} (page_id {ctx.page_id}) paged at "
-                                                f"{ctx.now:%Y-%m-%d %H:%M} UTC. Investigate it."}]
+        messages = [{"role": "user", "content": request_text(ctx, previous)}]
         state = {"calls": [], "api": [], "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
                  "cost": 0.0, "priced": True, "models": [], "exhausted": None, "attempts": 0, "errors": [], "stop": None}
         final = False                   # tools switched off: the next answer must be the note
@@ -327,7 +384,7 @@ class Investigator:
             added_since += len(retry)
             final = True
 
-        return self._finish(ctx, note, state, messages, began)
+        return self._finish(ctx, note, state, messages, began, previous)
 
     def _request(self, messages, tools, final, deadline, state) -> tuple:
         """One API request, retried once on a rate limit, an overload or a connection error if time
@@ -381,16 +438,18 @@ class Investigator:
         state["api"].append({"ok": True, "model": model, "stop_reason": _field(response, "stop_reason"), "tools_off": final,
                              "usage": got, "seconds": round(seconds, 2), "request_id": getattr(response, "_request_id", None)})
 
-    def _finish(self, ctx: Context, note, state, messages, began) -> dict:
+    def _finish(self, ctx: Context, note, state, messages, began, previous=None) -> dict:
         calls = {c["call_id"]: c["tool"] for c in state["calls"]}
         valid = note is not None
         if not valid:
-            note = {"page_id": ctx.page_id, "verdict": "unsure", "confidence": 0.0,
-                    "suspected_cause": f"(no valid note: {state['stop']})", "affected_entities": [], "evidence": [],
-                    "next_step": "Investigate the page by hand."}
+            note = {"page_id": ctx.page_id, "needs_human": "unsure", "confidence": 0.0,
+                    "cause": {"category": "unknown", "description": f"(no valid note: {state['stop']})"},
+                    "impact": {"degraded": [], "description": "(not determined)", "evidence": []},
+                    "affected_entities": [], "evidence": [], "next_step": "Investigate the page by hand."}
         note = {k: note[k] for k in NOTE_FIELDS}
         note["evidence"] = [{**e, "tool": calls.get(e["tool_call_id"])} for e in note["evidence"]]
-        out = {**note, "page": ctx.page, "paged_at": ctx.now.isoformat(), "advisory": True, "valid": valid,
+        out = {**note, "page": ctx.original_page or ctx.page, "paged_at": ctx.paged_at.isoformat(), "as_of": ctx.now.isoformat(),
+               "follow_up": previous is not None, "advisory": True, "valid": valid,
                "model": self.config.model, "models_served": state["models"], "tool_calls": len(state["calls"]),
                "tools_used": [c["tool"] for c in state["calls"]], "api_requests": len(state["api"]),
                "tokens": {**state["tokens"], "total": sum(state["tokens"].values())},
@@ -398,13 +457,14 @@ class Investigator:
                "seconds": round(self.clock() - began, 2), "attempts": state["attempts"],
                "budget_exhausted": state["exhausted"], "stop": state["stop"],
                "invalid_answers": [e["errors"] for e in state["errors"]]}
-        out["transcript"] = self._save(ctx, out, state, messages)
+        out["transcript"] = self._save(ctx, out, state, messages, previous is not None)
         return out
 
-    def _save(self, ctx: Context, note: dict, state, messages) -> str | None:
+    def _save(self, ctx: Context, note: dict, state, messages, follow_up: bool = False) -> str | None:
         if not self.config.runs_dir:
             return None
-        path = Path(self.config.runs_dir) / self.run_name / f"page-{ctx.page:04d}.json"
+        name = f"page-{(ctx.original_page or ctx.page):04d}{'-follow-up' if follow_up else ''}.json"
+        path = Path(self.config.runs_dir) / self.run_name / name
         path.parent.mkdir(parents=True, exist_ok=True)
         transcript = {"config": self.config.public(), "page": ctx.page, "page_id": ctx.page_id, "now": ctx.now.isoformat(),
                       "system": SYSTEM, "tools": [t["name"] for t in context_tools.definitions()],

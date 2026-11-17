@@ -283,27 +283,45 @@ class Context:
     calls: list = field(default_factory=list)   # (tool, args) of every call made through `call`
     evidence: object = None           # logs, k8s events, changes: `history` (stream v1) or a StreamEvidence (v2)
     evidence_source: str = HISTORY
+    paged_at: pd.Timestamp | None = None   # when the page went out (== now, except for a follow-up)
+    original_page: int | None = None       # the page that paged, if it has since been merged into `page`
+
+    def __post_init__(self):
+        if self.paged_at is None:
+            self.paged_at = self.now
 
     @classmethod
-    def at_page(cls, store: StreamStore, ds, index: int, catalog: Catalog | None = None, stream_version: int = 1) -> "Context":
+    def at_page(cls, store: StreamStore, ds, index: int, catalog: Catalog | None = None, stream_version: int = 1,
+                at=None) -> "Context":
         """The context of the page-out at `store.pages[index]` (a `paged` record), as it was then.
-        stream_version 2: logs, events and changes are read from the stream (module docstring)."""
+        stream_version 2: logs, events and changes are read from the stream (module docstring).
+        at: a LATER time to cut at instead (a follow-up): everything stamped up to `at`, page records
+        emitted up to `at` (the page followed into the page that absorbed it, if it was merged)."""
         if stream_version not in wire.STREAM_VERSIONS:
             raise ValueError(f"stream_version must be one of {wire.STREAM_VERSIONS}")
         record = store.pages[index]
         if record["kind"] != "paged":
             raise ValueError(f"pages[{index}] is a {record['kind']!r} record, not a page-out")
-        now = utc(record["emitted_at"])
+        paged_at = utc(record["emitted_at"])
+        now = paged_at if at is None else utc(at)
+        if now < paged_at:
+            raise ValueError(f"cannot cut at {now}, before the page went out at {paged_at}")
+        page_records = list(store.pages[:index + 1]) + [r for r in store.pages[index + 1:] if utc(r["emitted_at"]) <= now]
+        page = int(record["page"])
+        for r in page_records[index + 1:]:                     # merged since: follow the page into its new holder
+            if r["kind"] == "merged" and page in r["absorbed"]:
+                page = int(r["page"])
         frame = store.metrics()
         history = ds.at(now)
         stream_start = frame.index[0] if len(frame.index) else None
         evidence = history if stream_version == 1 else StreamEvidence(store, history, now, stream_start)
-        return cls(now=now, page=int(record["page"]), page_id=record["page_id"],
+        return cls(now=now, page=page, page_id=record["page_id"],
                    metrics=frame.loc[:now].copy(), runs=[m for m in store.runs if wire.event_time(m) <= now],
-                   page_records=list(store.pages[:index + 1]),
+                   page_records=page_records,
                    alert_records=[r for r in store.alerts if utc(r["emitted_at"]) <= now],
                    history=history, catalog=catalog or Catalog.from_ds(ds), stream_start=stream_start,
-                   evidence=evidence, evidence_source=HISTORY if stream_version == 1 else STREAM_THEN_HISTORY)
+                   evidence=evidence, evidence_source=HISTORY if stream_version == 1 else STREAM_THEN_HISTORY,
+                   paged_at=paged_at, original_page=int(record["page"]))
 
 
 # ------------------------------------------------------------------------------------------- tools
@@ -328,10 +346,9 @@ def _str(desc, enum=None):
 
 
 def get_page(ctx: Context) -> dict:
-    held, ids, merged = {}, {}, {}
+    held, merged = {}, {}
     for r in ctx.page_records:
         key = r["page"]
-        ids[key] = r["page_id"]
         if r["kind"] == "paged":
             continue
         held.setdefault(key, []).append(r["alert"])
@@ -349,7 +366,10 @@ def get_page(ctx: Context) -> dict:
                  last_explanation=a["explanation"],
                  demoted=demoted.get((a["time"], a["target"], a["detector"]), False))
     shown = 30
-    return {"source": STREAM, "page": ctx.page, "page_id": ids.get(ctx.page, ctx.page_id), "paged_at": _ts_s(ctx.now),
+    original = getattr(ctx, "original_page", None)
+    merged_into = {"paged_as_page": original} if original is not None and original != ctx.page else {}
+    return {"source": STREAM, "page": ctx.page, "page_id": ctx.page_id, **merged_into,
+            "paged_at": _ts_s(getattr(ctx, "paged_at", None) or ctx.now), "as_of": _ts_s(ctx.now),
             "n_alerts": len(alerts), "merged_pages": merged.get(ctx.page, []),
             "entities": dict(Counter(ctx.catalog.topology.entity(a["target"]) for a in alerts).most_common()),
             "by_target": [{**g, "first": _ts_s(g["first"]), "last": _ts_s(g["last"]), "max_score": _r(g["max_score"])}

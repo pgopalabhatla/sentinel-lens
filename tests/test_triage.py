@@ -62,8 +62,11 @@ def _plain(o):
     return o if isinstance(o, dict) else vars(o)
 
 
-def note_json(page_id, verdict="real", evidence=("c1",), entities=("consumer_group:grp",), **extra):
-    return json.dumps({"page_id": page_id, "verdict": verdict, "confidence": 0.8, "suspected_cause": "lag grows",
+def note_json(page_id, answer="yes", evidence=("c1",), entities=("consumer_group:grp",), **extra):
+    degraded = ["lag"] if evidence else ["none"]
+    return json.dumps({"page_id": page_id, "needs_human": answer, "confidence": 0.8,
+                       "cause": {"category": "capacity", "description": "lag grows"},
+                       "impact": {"degraded": degraded, "description": "lag is growing", "evidence": list(evidence[:1])},
                        "affected_entities": list(entities), "evidence": [{"tool_call_id": c, "finding": "seen"} for c in evidence],
                        "next_step": "check the consumer", **extra})
 
@@ -79,7 +82,9 @@ def test_a_valid_note_after_some_tool_calls(store, ds, tmp_path):
     llm = FakeLLM([[tool_use("get_page")], [tool_use("query_metric", {"series_id": world.LAG})],
                    [text(note_json(ctx.page_id, evidence=("c1", "c2")))]])
     note = investigator(llm, tmp_path).investigate(ctx)
-    assert note["valid"] and note["verdict"] == "real" and note["tool_calls"] == 2 and note["advisory"]
+    assert note["valid"] and note["needs_human"] == "yes" and note["tool_calls"] == 2 and note["advisory"]
+    assert note["cause"] == {"category": "capacity", "description": "lag grows"} and note["impact"]["degraded"] == ["lag"]
+    assert note["paged_at"] == note["as_of"] and not note["follow_up"]
     assert [e["tool"] for e in note["evidence"]] == ["get_page", "query_metric"]
     assert note["tokens"]["total"] == 3 * 1100 and note["cost_usd_estimate"] == pytest.approx(3 * (1000 * 2 + 100 * 10) / 1e6)
     assert all(r["tool_choice"] == {"type": "auto"} for r in llm.requests)
@@ -120,7 +125,7 @@ def test_no_request_runs_past_the_deadline(store, ds, tmp_path):
     llm = FakeLLM([[tool_use("get_page", id_=f"t{i}")] for i in range(20)], clock=clock, seconds=50.0)
     note = investigator(llm, tmp_path, clock=clock, max_seconds=120, final_reserve_seconds=25).investigate(ctx)
     assert all(r["at"] + r["timeout"] <= 120 for r in llm.requests) and clock.t <= 120
-    assert not note["valid"] and note["verdict"] == "unsure" and note["budget_exhausted"] == "time"
+    assert not note["valid"] and note["needs_human"] == "unsure" and note["budget_exhausted"] == "time"
 
 
 def test_the_token_cap_stops_the_investigation(store, ds, tmp_path):
@@ -128,7 +133,7 @@ def test_the_token_cap_stops_the_investigation(store, ds, tmp_path):
     llm = FakeLLM([[tool_use("get_page", id_=f"t{i}")] for i in range(20)], usage=(50_000, 1_000))
     note = investigator(llm, tmp_path, max_tokens=200_000).investigate(ctx)
     assert note["tokens"]["total"] <= 200_000
-    assert note["budget_exhausted"] == "tokens" and not note["valid"] and note["verdict"] == "unsure"
+    assert note["budget_exhausted"] == "tokens" and not note["valid"] and note["needs_human"] == "unsure"
 
 
 def test_an_invalid_note_is_sent_back_once_with_the_reasons(store, ds, tmp_path):
@@ -144,10 +149,10 @@ def test_an_invalid_note_is_sent_back_once_with_the_reasons(store, ds, tmp_path)
 def test_two_invalid_notes_give_an_unsure_note_and_no_third_try(store, ds, tmp_path):
     ctx = ctx_of(store, ds, 1)
     llm = FakeLLM([[tool_use("get_page")], [text(note_json(ctx.page_id, evidence=("c7",)))],
-                   [text(note_json(ctx.page_id, verdict="probably"))], [text(note_json(ctx.page_id))]])
+                   [text(note_json(ctx.page_id, answer="probably"))], [text(note_json(ctx.page_id))]])
     note = investigator(llm, tmp_path).investigate(ctx)
-    assert len(llm.requests) == 3 and not note["valid"] and note["verdict"] == "unsure" and note["confidence"] == 0
-    assert "not made" in note["invalid_answers"][0][0] and "verdict" in note["invalid_answers"][1][0]
+    assert len(llm.requests) == 3 and not note["valid"] and note["needs_human"] == "unsure" and note["confidence"] == 0
+    assert "not made" in note["invalid_answers"][0][0] and "needs_human" in note["invalid_answers"][1][0]
 
 
 def test_a_refused_or_failing_request_ends_with_an_unsure_note(store, ds, tmp_path):
@@ -162,7 +167,18 @@ def test_a_refused_or_failing_request_ends_with_an_unsure_note(store, ds, tmp_pa
 
 
 @pytest.mark.parametrize("change, fragment", [
-    ({"verdict": "maybe"}, "verdict"), ({"confidence": 1.5}, "confidence"), ({"confidence": True}, "confidence"),
+    ({"needs_human": "maybe"}, "needs_human"), ({"needs_human": True}, "needs_human"), ({"verdict": "real"}, "unknown fields"),
+    ({"confidence": 1.5}, "confidence"), ({"confidence": True}, "confidence"),
+    ({"cause": "a deploy"}, "cause must be"), ({"cause": {"category": "bad luck", "description": "x"}}, "cause.category"),
+    ({"cause": {"category": "change", "description": ""}}, "cause.description"),
+    ({"cause": {"category": "change"}}, "cause must be"),
+    ({"impact": {"degraded": ["lag"], "description": "x"}}, "impact must be"),
+    ({"impact": {"degraded": [], "description": "x", "evidence": []}}, "impact.degraded"),
+    ({"impact": {"degraded": ["throughput"], "description": "x", "evidence": ["c1"]}}, "impact.degraded"),
+    ({"impact": {"degraded": ["none", "lag"], "description": "x", "evidence": ["c1"]}}, "cannot go with"),
+    ({"impact": {"degraded": ["lag"], "description": "x", "evidence": []}}, "must cite"),
+    ({"impact": {"degraded": ["lag"], "description": "x", "evidence": ["c8"]}}, "not made"),
+    ({"impact": {"degraded": ["lag"], "description": " ", "evidence": ["c1"]}}, "impact.description"),
     ({"page_id": "other"}, "page_id"), ({"affected_entities": ["pod:ghost"]}, "entity graph"),
     ({"affected_entities": "pod:p-a"}, "list of strings"), ({"evidence": [{"tool_call_id": "c9", "finding": "x"}]}, "not made"),
     ({"evidence": [{"tool_call_id": "c1"}]}, "evidence must be"), ({"evidence": []}, "at least one"),
@@ -174,7 +190,7 @@ def test_validate_note_rejects(change, fragment):
 
 
 def test_validate_note_accepts_unsure_without_evidence_and_parse_finds_the_object():
-    note = json.loads(note_json("P", verdict="unsure", evidence=(), entities=()))
+    note = json.loads(note_json("P", answer="unsure", evidence=(), entities=()))
     assert validate_note(note, "P", set(), set()) == []
     assert parse_note('Here it is: {"a": 1} done')[0] == {"a": 1}
     assert parse_note("no json")[0] is None and parse_note("[1, 2]")[0] is None
@@ -188,7 +204,7 @@ def test_the_transcript_is_saved_and_holds_no_api_key(store, ds, tmp_path, monke
     saved = (tmp_path / "runs/t/page-0001.json").read_text()
     assert note["transcript"].endswith("page-0001.json") and "THIS-MUST-NOT-APPEAR" not in saved
     t = json.loads(saved)
-    assert t["tool_calls"][0]["tool"] == "get_page" and t["note"]["verdict"] == "real" and len(t["messages"]) == 4
+    assert t["tool_calls"][0]["tool"] == "get_page" and t["note"]["needs_human"] == "yes" and len(t["messages"]) == 4
 
 
 # ------------------------------------------------------------------------------------ dispatcher
@@ -206,7 +222,7 @@ class FakeAgent:
         self.seen.append((ctx.page, ctx.now, page["n_alerts"]))
         if ctx.page in self.fail_on:
             raise RuntimeError("crash")
-        return {"page_id": ctx.page_id, "verdict": "noise", "confidence": 0.5, "tool_calls": 0, "page": ctx.page}
+        return {"page_id": ctx.page_id, "needs_human": "no", "confidence": 0.5, "tool_calls": 0, "page": ctx.page}
 
 
 def notes(io):
@@ -275,7 +291,7 @@ def test_dispatcher_runs_at_most_three_at_once(ds):
         time.sleep(0.05)
         with lock:
             running[0] -= 1
-        return {"page_id": ctx.page_id, "verdict": "noise", "confidence": 0.5, "tool_calls": 0}
+        return {"page_id": ctx.page_id, "needs_human": "no", "confidence": 0.5, "tool_calls": 0}
 
     Dispatcher(io, ds, agent, concurrency=3, log=lambda line: None).run(until_end=True)
     assert len(notes(io)) == 10 and peak[0] == 3
@@ -298,7 +314,7 @@ def test_the_mcp_server_and_the_investigator_offer_the_same_tools(store, ds, tmp
             return tools, called
 
     tools, called = anyio.run(listed)
-    llm = FakeLLM([[text(note_json(ctx.page_id, verdict="unsure", evidence=(), entities=()))]])
+    llm = FakeLLM([[text(note_json(ctx.page_id, answer="unsure", evidence=(), entities=()))]])
     investigator(llm, tmp_path).investigate(ctx)
     sent = llm.requests[0]["tools"]
     assert [t.name for t in tools] == [t["name"] for t in sent] == [t.name for t in ct.TOOLS]

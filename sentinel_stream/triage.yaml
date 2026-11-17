@@ -9,6 +9,7 @@ budget:
   max_seconds: 120             # wall time for the whole investigation, API calls included
   max_tokens: 200000           # input + output tokens over all API calls of one investigation
   final_reserve_seconds: 25    # stop calling tools this long before the deadline, to leave time for the note
+follow_up_minutes: 10           # a note that says needs_human "unsure" is re-investigated once, this long after paging
 runs_dir: runs                 # full transcripts, one JSON file per page (gitignored)
 # USD per million tokens, for the cost estimate. cache_write is the 5-minute cache write (1.25 x input).
 prices_per_mtok:

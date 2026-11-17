@@ -8,10 +8,19 @@ the page records up to that one, the readings stamped up to then) and writes the
 the topic `triage`, keyed by the page's id. At most `concurrency` (3) investigations run at once.
 
 What goes on `triage`:
-    {"type": "note", "page_id", "page", "verdict", ... }        one per page-out (investigator.py has the fields)
+    {"type": "note", "page_id", "page", "needs_human", ... }    one per page-out (investigator.py has the fields)
+    {"type": "follow_up", "follow_up_of": page_id, ... }        a second note, see "Follow-up" below
     {"type": "link", "link_id", "page", "page_id", "absorbed", "notes": [page_id, ...], "at"}
             a page that had paged (or several) merged with another page later. The notes of every page
             involved are linked under the merged page; nothing is investigated again.
+
+Follow-up. With `follow_up_minutes` set, a note whose needs_human is "unsure" gets ONE follow-up: a
+fresh agent on the same page as it is at paging time + follow_up_minutes (Context.at_page(at=...): the
+tools see nothing after that time; a page merged in the meantime is followed into the page that holds
+it). It is started once the stream has passed that time (telemetry stamped at least `follow_up_grace`
+later, so the consumer has had time to write that minute's pages), or, at the end of a finished stream,
+if the time is inside it. Its note is written as a `follow_up` record linked by page id. A follow-up
+never gets a follow-up.
 
 Notes are ADVISORY. Nothing reads `triage` to change a page, a detector, a threshold or the feedback;
 an engineer reads it next to the page.
@@ -37,8 +46,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+import pandas as pd
+
 from sentinel_stream import wire
 from sentinel_stream.context_tools import Catalog, Context, StreamStore
+from sentinel_stream.events import utc
 
 
 @dataclass(frozen=True)
@@ -99,6 +111,8 @@ class Dispatcher:
     concurrency: int = 3
     log: object = field(default=lambda line: print(line, file=sys.stderr, flush=True))
     stream_version: int = 1           # 2: logs, events and changes are read from `telemetry` (context_tools)
+    follow_up_minutes: float | None = None    # re-investigate an "unsure" note this long after paging; None: never
+    follow_up_grace: pd.Timedelta = pd.Timedelta("1min")
 
     def __post_init__(self):
         self.store = StreamStore()
@@ -111,9 +125,20 @@ class Dispatcher:
         self._pool = ThreadPoolExecutor(max_workers=self.concurrency, thread_name_prefix="triage")
         self._futures: list = []
         self.investigated = self.failed = 0
+        self.followed: set = set()       # page ids with a follow-up on `triage`
+        self._unsure: dict = {}          # page id -> its first note, if that said "unsure" (from `triage`)
+        self._follow: list = []          # (due time, index into store.pages, first note) not started yet
+        self._lock = threading.Lock()
+        self._clock = None               # the latest event time read from `telemetry`
+        self._ended = False              # the stream's closing watermark has been read
+        self.followed_up = self.follow_ups_past_end = 0
         for r in self.io.read(self.topics.triage):
             if r.get("type") == "note":
                 self.noted.add(r["page_id"])
+                if r.get("needs_human") == "unsure":
+                    self._unsure[r["page_id"]] = r
+            elif r.get("type") == "follow_up":
+                self.followed.add(r["follow_up_of"])
             elif r.get("type") == "link":
                 self.linked.add(r["link_id"])
 
@@ -126,6 +151,9 @@ class Dispatcher:
     def _catch_up(self) -> None:
         for m in self._read("telemetry"):
             self.store.add_telemetry(m)
+            t = wire.event_time(m)
+            self._clock = t if self._clock is None else max(self._clock, t)
+            self._ended = self._ended or m["type"] == wire.WATERMARK
         for r in self._read("alerts"):
             self.store.add_alert(r)
 
@@ -142,7 +170,9 @@ class Dispatcher:
                     self._catch_up()
                     ctx = Context.at_page(self.store, self.ds, index, self.catalog, self.stream_version)
                     self.started.add(record["page_id"])
-                    self._futures.append(self._pool.submit(self._investigate, ctx))
+                    self._futures.append(self._pool.submit(self._investigate, ctx, index))
+                elif record["page_id"] in self._unsure and record["page_id"] not in self.followed:
+                    self._schedule(index, self._unsure.pop(record["page_id"]))     # restarted before its follow-up
             elif record["kind"] == "merged":
                 involved = set(self._notes_of.pop(key, set()))
                 for k in record["absorbed"]:
@@ -150,8 +180,50 @@ class Dispatcher:
                 if involved:
                     self._notes_of[key] = involved
                     self._link(record, involved)
+        self._release(final=False)
         self._futures = [f for f in self._futures if not f.done()]
         return len(new)
+
+    # ---------------------------------------------------------------------------------- follow-ups
+    def _schedule(self, index: int, note: dict) -> None:
+        if not self.follow_up_minutes:
+            return
+        due = utc(self.store.pages[index]["emitted_at"]) + pd.Timedelta(minutes=float(self.follow_up_minutes))
+        with self._lock:
+            self._follow.append((due, index, note))
+
+    def _release(self, final: bool) -> None:
+        """Start the follow-ups whose time the stream has passed. final: the topics are complete, so
+        a follow-up whose time the stream never reaches is dropped."""
+        if not self._follow:
+            return
+        self._catch_up()
+        with self._lock:
+            waiting, self._follow = self._follow, []
+        for due, index, note in sorted(waiting, key=lambda x: x[0]):
+            done = self._ended or final
+            if self._clock is not None and (self._clock >= due + self.follow_up_grace or (done and self._clock >= due)):
+                ctx = Context.at_page(self.store, self.ds, index, self.catalog, self.stream_version, at=due)
+                self._futures.append(self._pool.submit(self._follow_up, ctx, note))
+            elif done:
+                self.follow_ups_past_end += 1
+                self.log(f"page {note.get('page')} ({note['page_id']}): no follow-up, the stream ends before {due:%m-%d %H:%M}")
+            else:
+                with self._lock:
+                    self._follow.append((due, index, note))
+
+    def _follow_up(self, ctx: Context, first: dict) -> None:
+        try:
+            note = self.investigate(ctx, previous=first)
+        except Exception as e:
+            self.failed += 1
+            self.log(f"page {ctx.page_id}: follow-up failed: {type(e).__name__}: {e}")
+            return
+        self.io.write(self.topics.triage, ctx.page_id, {"type": "follow_up", "follow_up_of": ctx.page_id, **note})
+        self.followed.add(ctx.page_id)
+        self.followed_up += 1
+        self.log(f"follow-up of {ctx.page_id} at {ctx.now:%m-%d %H:%M}: {_answer(note)} ({note.get('confidence')}) "
+                 f"{note.get('tool_calls')} tool calls, ${note.get('cost_usd_estimate')}")
 
     def _link(self, record: dict, notes: set) -> None:
         link_id = f"{record['page']}@{record['emitted_at']}"
@@ -163,7 +235,7 @@ class Dispatcher:
         self.linked.add(link_id)
         self.log(f"link: page {record['page']} absorbed {record['absorbed']}; notes {sorted(notes)}")
 
-    def _investigate(self, ctx: Context) -> None:
+    def _investigate(self, ctx: Context, index: int) -> None:
         try:
             note = self.investigate(ctx)
         except Exception as e:                      # no note: it is investigated again after a restart
@@ -173,16 +245,20 @@ class Dispatcher:
         self.io.write(self.topics.triage, ctx.page_id, {"type": "note", **note})
         self.noted.add(ctx.page_id)
         self.investigated += 1
-        self.log(f"page {ctx.page} at {ctx.now:%m-%d %H:%M}: {note['verdict']} ({note['confidence']}) "
+        if note.get("needs_human") == "unsure" and ctx.page_id not in self.followed:
+            self._schedule(index, note)
+        self.log(f"page {ctx.page} at {ctx.now:%m-%d %H:%M}: {_answer(note)} ({note['confidence']}) "
                  f"{note['tool_calls']} tool calls, {note.get('seconds')} s, ${note.get('cost_usd_estimate')}")
 
     def wait(self) -> None:
-        for f in list(self._futures):
-            f.result()
-        self._futures = []
+        while self._futures:
+            futures, self._futures = list(self._futures), []
+            for f in futures:
+                f.result()
 
     def run(self, stop=lambda: False, until_end: bool = False, poll_seconds: float = 1.0) -> "Dispatcher":
-        """Follow `pages`. until_end: handle what is on it now, wait for the investigations, return."""
+        """Follow `pages`. until_end: handle what is on the topics now (follow-ups included), wait for
+        the investigations, return."""
         try:
             while not stop():
                 n = self.step()
@@ -191,9 +267,17 @@ class Dispatcher:
                 if n == 0:
                     time.sleep(poll_seconds)
             self.wait()
+            if until_end:
+                while self._follow:              # first notes are in: their follow-ups, on the finished topics
+                    self._release(final=True)
+                    self.wait()
         finally:
             self._pool.shutdown(wait=True)
         return self
+
+
+def _answer(note: dict) -> str:
+    return str(note.get("needs_human", note.get("verdict")))
 
 
 def main(argv=None) -> int:
@@ -215,6 +299,8 @@ def main(argv=None) -> int:
     ap.add_argument("--until-end", action="store_true", help="handle the page-outs on the topic now, then exit")
     ap.add_argument("--stream-version", type=int, default=1, choices=(1, 2),
                     help="2: logs, Kubernetes events and changes are read from the telemetry topic")
+    ap.add_argument("--follow-up-minutes", type=float, default=None,
+                    help="re-investigate an 'unsure' page this long after it paged (default: triage.yaml); 0: never")
     args = ap.parse_args(argv)
 
     topics = Topics(args.telemetry_topic, args.alerts_topic, args.pages_topic, args.triage_topic)
@@ -223,8 +309,9 @@ def main(argv=None) -> int:
     stopping = []
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stopping.append(1))
+    follow = config.follow_up_minutes if args.follow_up_minutes is None else args.follow_up_minutes
     d = Dispatcher(KafkaTopics(args.bootstrap, topics), DataSource(args.data), agent.investigate, topics, args.concurrency,
-                   stream_version=args.stream_version)
+                   stream_version=args.stream_version, follow_up_minutes=follow or None)
     d.log(f"{len(d.noted)} notes and {len(d.linked)} links already on {topics.triage!r}; model {config.model}")
     d.run(stop=lambda: bool(stopping), until_end=args.until_end)
     d.log(f"done: {d.investigated} investigated, {d.failed} failed")

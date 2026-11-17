@@ -37,7 +37,8 @@ def test_a_real_investigation_returns_a_valid_note_within_budget(tmp_path):
     note = Investigator(config, run_name="llm-test").investigate(ctx)
 
     assert note["valid"], note
-    assert note["verdict"] in ("real", "noise", "unsure") and 0 <= note["confidence"] <= 1
+    assert note["needs_human"] in ("yes", "no", "unsure") and 0 <= note["confidence"] <= 1
+    assert note["cause"]["category"] in ("change", "capacity", "failure", "external", "unknown") and note["impact"]["degraded"]
     assert note["tool_calls"] <= config.budget.max_tool_calls and note["seconds"] <= config.budget.max_seconds
     assert note["tokens"]["total"] <= config.budget.max_tokens and note["cost_usd_estimate"] is not None
     assert "get_page" in note["tools_used"]
