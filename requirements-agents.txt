@@ -1,0 +1,10 @@
+# Only for the per-page triage agent (sentinel_stream/investigator.py, dispatcher.py, mcp_server.py)
+# and `pytest -m llm`. The detectors, the engine, the Kafka pipeline and the default tests do not need it.
+#
+# anthropic: the official Claude SDK; the investigator calls the Messages API with tool use through it.
+# mcp: the official Model Context Protocol SDK; mcp_server.py serves the same context tools over MCP.
+#      (tests/test_triage.py checks the MCP server and the investigator offer identical tools; it is
+#      skipped when mcp is not installed.)
+-r requirements-kafka.txt
+anthropic>=2.10.0
+mcp>=2.3.0
