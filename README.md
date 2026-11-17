@@ -216,6 +216,39 @@ above (the ordering from the post-hoc table).
   adopted; the code is on the branch `change-point`. Source: docs/log.md, "Nov 11, change point
   detector (not adopted)".
 
+## A second world: the scripted live week
+
+The test week is used up, so the same frozen system was run once on a second world: a generated week
+with no incidents, streamed through Kafka, into which 14 failures were injected (seven scenarios,
+twice each, at seeded random times and sizes). The scenarios, their ranges, the schedule and the
+scoring rule were committed before the run ([docs/live-protocol.md](docs/live-protocol.md)); the
+result is saved as the runner wrote it ([docs/results/live-week-1.md](docs/results/live-week-1.md)).
+
+| | |
+|---|---|
+| injections detected | 12 of 14 |
+| missed | both Flink state leaks (no alert at all in 6 hours each) |
+| time to detect, median / maximum | 12 min / 132 min |
+| pages sent | 29: 25 for an injection, 4 false |
+| false pages per day | 0.57, the same 4 pages the week has with nothing injected |
+
+How to read it:
+
+- **The slow-leak limitation is confirmed.** The Flink leaks added 16-23% to TaskManager memory in
+  their 6 hours and never alerted. The consumer leaks were paged after 116 and 132 minutes, when
+  memory was 30-40% above its usual level.
+- **The zero-baseline limitation did not show here.** Both Trino heavy queries were paged in 12-17
+  minutes, first through the workers' GC time; the queued-queries series also alerted. These
+  injections last 30-60 minutes at 0.8-1.2 of the batch scenario's size, so this does not say the
+  test-week miss (INC-015) is fixed.
+- **Four detections at 0 minutes say little.** The slow deploys and the crash loops restart a pod in
+  their first minute, as their batch originals do, and a restart always pages. Their next signals
+  came 10-14 minutes in.
+- **One cause, nine pages.** The hourly DAG paused for nine hours paged once per missed run.
+- 14 injections, two per scenario, one seed: counts, not rates. The injected failures are declared
+  effects on the readings, not simulated physics; each scenario lists what it approximates
+  (`sentinel_stream/scenarios_live.py`).
+
 ## Limitations
 
 - **Quiet, low-count series (INC-015).** The missed incident showed up on a queue length that sits
@@ -246,8 +279,9 @@ loop"; [docs/scope-v3.md](docs/scope-v3.md) for the scope.
 
 - **An agent with MCP tools.** The replay API mirrors the tools an investigating agent would call
   (metrics, logs, job history, recent changes). Root-cause analysis was cut from this version.
-- **A second generated world.** A dataset with a different incident schedule, to design and test
-  fixes for the two limitations above without touching the test week again.
+- **Fix the slow-leak miss, then test it on a third world.** The live week above is now seen, like
+  the test week. A fix (for example a trend rule next to the seasonal one) has to be judged on a new
+  schedule: another seed in `scripts/run_live_week.py`, with its own protocol.
 
 ## Setup and usage
 
@@ -259,18 +293,18 @@ pip install -r requirements-dev.txt        # pandas, numpy, scipy, pyyaml, matpl
 export PYTHONPATH=.
 
 python -m sentinel_sim.generate --out data --seed 7   # create the dataset (about 20 s; data/ is not in git)
-pytest                                                # 213 tests, about 55 s; some need data/ and are skipped without it
+pytest                                                # 266 tests, about 55 s; some need data/ or data_live/ and are skipped without it
 python examples/quickstart.py                         # tour of the replay API + the naive baseline on the test week
 ```
 
 Tests. The default `pytest` run skips two groups. `slow`: 12 tests that replay the whole test week
 through the streaming engine (`sentinel_stream/`) and compare it with the batch pipeline, and one
-that regenerates the dataset and checks it is byte-identical to the evaluated one. `kafka`: 4 tests
+that regenerates the dataset and checks it is byte-identical to the evaluated one. `kafka`: 7 tests
 that run the engine through a real broker (see "Run the live stream"); they are skipped when no
 broker is running.
 
 ```bash
-pytest                          # default: 213 tests, about 55 s
+pytest                          # default: 266 tests, about 55 s
 pytest -m slow                  # only the slow ones: 13 tests, about 95 s (needs data/)
 pytest -m kafka                 # through the broker: 4 tests, about 2 min 15 s (docker compose up -d first)
 pytest -m "slow or not slow"    # everything: 230 tests, about 5 min with the broker running
@@ -328,6 +362,24 @@ what the engine says with what is already written before sending anything (how a
 `pytest -m kafka` checks this through the broker: the test week gives exactly the in-process engine's
 alerts and page events, also when the consumer is killed three times on the way.
 
+### Inject a failure
+
+While the publisher runs it takes commands from the topic `control` and changes the readings it
+sends from that moment on. What it injected goes to the topic `answer_key`, which the consumer never
+reads (`tests/test_live_isolation.py`).
+
+```bash
+python -m sentinel_stream.injector list                                    # the seven scenarios and their ranges
+python -m sentinel_stream.injector inject trino_heavy_query -p magnitude=1.0 -p duration_min=40
+python -m sentinel_stream.injector stop <id>                               # end it before its duration is over
+python -m sentinel_stream.live_score --data data_live                      # detected? time to detect? false pages?
+```
+
+The scorer reads only `answer_key` and `pages`. An injection counts as detected when a page that
+pages between its start and 30 minutes after its stop holds an alert on one of its target entities
+or 1 hop from one. `python scripts/run_live_week.py --rehearsal` runs the whole chain once with a
+dummy injection.
+
 ## Where to read more
 
 | File | What it is |
@@ -338,5 +390,7 @@ alerts and page events, also when the consumer is killed three times on the way.
 | [docs/config-frozen.md](docs/config-frozen.md) | Every parameter of the evaluated systems, generated from the code |
 | [docs/results/test-week.md](docs/results/test-week.md) | The test-week result, verbatim from the single run |
 | [docs/results/test-week-posthoc.md](docs/results/test-week-posthoc.md) | Post-hoc analysis: the miss, the slow detection, timing, false-alert counts |
+| [docs/live-protocol.md](docs/live-protocol.md) | The protocol of the scripted live week: scenarios, ranges, schedule, scoring rule |
+| [docs/results/live-week-1.md](docs/results/live-week-1.md) | The live-week result, as written by the single run |
 | [docs/dataset.md](docs/dataset.md) | The simulated platform, the files, the replay API and the scorer |
 | [docs/scope-v3.md](docs/scope-v3.md) | The project scope |

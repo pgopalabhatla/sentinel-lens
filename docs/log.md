@@ -526,3 +526,62 @@ A slip during this work, for the record: a shell command I ran while writing the
 Test runs on this branch: `pytest` 213 passed in 54 s (it was 199 in 28 s; the 10 broker-free consumer tests take about 19 s and the quiet-world generation about 5 s); `pytest -m slow` 13 passed in 95 s (the 12 test-week tests plus the seed-7 hash test, about 20 s); `pytest -m kafka` 4 passed in 2 min 12 s with the broker running. The Kafka tests use their own topics with a random prefix and delete them afterwards.
 
 Freeze flag: on this branch the runner's dry run reads `frozen_code_identical_to_tag: False`. The only difference from the tag inside the frozen paths is `sentinel_sim/generate.py` (the `--no-incidents` option; `git diff pre-test-freeze -- sentinel_lens sentinel_sim` shows that one file). `sentinel_lens/`, the runner and the frozen config are identical to the tag, and the seed-7 hash test shows the generator still writes the evaluated dataset byte for byte. If the flag should read True again, the option can move into a separate module outside `sentinel_sim/` that calls the same generator functions. Not done here: the task asked for a generator option, and whether the flag matters more is the author's call.
+
+## Nov 16, live injection and the scripted live week (a second world)
+
+Branch `live-injection`. It is branched off `kafka-stream`, not off main: the publisher, the consumer and the quiet-world generator it builds on are only on that branch, which is not merged. `sentinel_lens/` and `sentinel_sim/` are untouched here, and so are the engine's files.
+
+What was built:
+
+- **Scenarios** (`sentinel_stream/scenarios_live.py`). Seven batch scenarios ported as lists of effects on named series, in the vocabulary of the batch generator's `_bump`: add / mult / drop, with shape flat / ramp / decay. `magnitude` 1.0 is the batch scenario's size. Each scenario declares its parameter ranges and lists what the port approximates. Sizes are the batch constants; for the two scenarios that the batch generator leaves to `kafka_physics` (slow deploy, crash loop) they are what the physics produced on the train split (Oct 9 and Oct 12).
+- **Injector** (`sentinel_stream/injector.py`). Plain Python: commands in, telemetry messages through, answer-key records out. An injection is active for start <= t < stop. Two things are computed instead of declared, because they depend on the reading: a leak that reaches the container's memory limit is OOM-killed (restart counter +1, the ramp starts again), and CPU throttling follows CPU with the generator's own formula.
+- **Publisher**: reads commands from the topic `control`, applies the active scenarios to what it sends, writes what it injected to `answer_key`. With no command the stream is the data, message for message.
+- **Isolation** (`tests/test_live_isolation.py`). Static: no module the consumer process loads mentions either topic or imports the injection side. Through the broker: every Kafka call of the consumer is recorded while both injection topics exist and hold records; it is assigned `telemetry` only and touches nothing but telemetry, alerts and pages.
+- **Scorer** (`sentinel_stream/live_score.py`), reading only `answer_key` and `pages`. Rule: an injection is detected if a page that pages within [start, stop + 30 min] holds, at that moment, an alert on a target entity or 1 hop from one; time to detect = that paging time - start; a page-out matching no injection is false. Target entities are derived mechanically: the entities owning the series the injection changes, plus the DAG for a pause.
+- **Runner** (`scripts/run_live_week.py`): the seeded schedule generator, a rehearsal mode, and `--run-once`, which refuses unless the protocol is committed, the code is clean, the generated schedule is the one in the protocol and no result exists.
+
+Order of events, because it is the point of a pre-registration:
+
+1. Code and tests written. Before the protocol, the seven scenarios were only ever applied to readings (synthetic stream; the scheduled week through the injector with no engine). The whole pipeline was rehearsed with a dummy injection that is not one of the seven (one restart of `airflow-worker-0` on twelve hours of train).
+2. Schedule generated once with seed 1 (every scenario twice, 14 injections, non-overlapping). Not re-drawn.
+3. `docs/live-protocol.md` committed (`1f2b327`): scenarios, ranges, schedule, scoring rule, what is reported, what will not be done afterwards.
+4. `python scripts/run_live_week.py --run-once`, once, at max speed (79 s). Output saved by the runner to [docs/results/live-week-1.md](results/live-week-1.md) and committed as written.
+
+Result (the frozen system, `data_live`, Oct 26 - Nov 1, 14 injections):
+
+| | |
+|---|---|
+| injections detected | 12 of 14 |
+| median / maximum time to detect | 12 min / 132 min |
+| page-outs | 29: 25 matching an injection, 4 false |
+| false pages per day | 0.57 |
+
+| scenario | detected | time to detect (min) | first paged by |
+|---|---|---|---|
+| broker_gc_pressure | 2 of 2 | 12, 12 | under-replicated partitions (guardrail) |
+| consumer_memory_leak | 2 of 2 | 116, 132 | pod memory (seasonal) |
+| consumer_slow_deploy | 2 of 2 | 0, 0 | pod restart (guardrail) |
+| dag_paused | 2 of 2 | 52, 70 | run not started (schedule watcher) |
+| flink_state_leak | 0 of 2 | - | - |
+| producer_crashloop | 2 of 2 | 0, 0 | pod restart (guardrail) |
+| trino_heavy_query | 2 of 2 | 17, 12 | worker GC time (seasonal) |
+
+The 4 false page-outs are exactly the 4 the week has with nothing injected (same times, same alerts). The injections caused no page outside their own entities.
+
+Reading the result. Everything below was looked up after the run, read-only, from the `pages` topic of the run; nothing was re-run.
+
+- **Slow leak: confirmed on a second world.** Both Flink state leaks ran for about 6 hours without a single alert on or near their targets. They added 390-563 MiB to TaskManagers that usually sit near 2,460 MiB, i.e. 16-23%. The consumer leaks were paged at 116 and 132 minutes, when they had added 30-40% to the usual 400 MiB. This fits what the Nov 11 entry says about the 5% floor (memory has to be about 30% above expected to be hot), but I did not re-derive the floor on this data, so take "fits" as my reading.
+- **Zero-baseline queue: not reproduced.** In both Trino injections `trino_queued_queries` alerted (17 minutes in), after the workers' GC time and CPU. These injections add 18 and 26 queued queries for 30-60 minutes; the test-week miss (INC-015) had only 2 hot readings of 9. So the limitation exists as described, and this week does not hit it.
+- **The four detections at 0 minutes rest on a restart**, as the protocol said in advance. Without it the next signals were: consumer lag 10 minutes in (slow deploy), and the missing traffic 12-14 minutes in (crash loop).
+- **Pages per cause.** The hourly DAG paused for 9 hours produced 9 page-outs, one per missed run, because the runs are 60 minutes apart and the correlator's gap is 15. Most other injections produced 1 or 2.
+- **The mild broker GC injection** (magnitude 0.52) was paged at 12 minutes through under-replicated partitions, which the port does not scale with magnitude. Its GC time and produce latency alerted 19 minutes in; its heap did not alert.
+
+What this does not show: 14 injections, two per scenario, one seed, so these are counts. The failures are declared effects, not physics (lag is a straight ramp that also grows at night; a paused DAG's run is simply missing; no catch-up run). And the scenarios were ported by someone who knows the detectors; the guard is that sizes come from the batch scenarios and the ranges were fixed before any scenario met the engine.
+
+Not done, on purpose: no detector, threshold or rule was changed after seeing this. A fix for the slow leak is future work and has to be judged on a third world (another schedule seed with its own protocol), since this week is now seen.
+
+Other things worth knowing:
+
+- A start-up race in the consumer was found and fixed while building the runner: it looked up its start offset and, finding nothing yet, then asked for the end of the topic; a publisher writing between the two calls would have made it jump over messages. It now reads the end first. No effect on what it emits (the Kafka tests pass unchanged).
+- A consumer restart during an injected week is not equivalent to an uninterrupted run: the engine is rebuilt from the data directory, which does not hold the injected readings. The scripted run used one consumer from start to end.
+- The run's topics (`live-week-1-*`) are still on the local broker for inspection; `docker compose down -v` removes them.
