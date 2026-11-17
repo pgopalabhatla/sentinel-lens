@@ -9,6 +9,7 @@ budget:
   min_per_day: 1                # asked for in the prompt and reported; cannot be enforced
   max_per_day: 3                # enforced in code
   max_active: 2                 # enforced in code: never more than this many injections active at once
+  min_gap_minutes: 180          # enforced in code: injection starts at least this far apart
   max_tool_calls_per_wake: 8
   max_seconds_per_wake: 90
   max_tokens_per_wake: 80000

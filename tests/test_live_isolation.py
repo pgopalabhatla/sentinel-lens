@@ -337,7 +337,8 @@ def test_through_the_broker_the_attacker_writes_to_control_only_and_reads_nothin
         monkeypatch.setattr(broker, "Consumer", SpyConsumer)
         cfg = A.Config(model="fake", effort=None, wake_every_minutes=60)
         att = A.Attacker(DataSource(ROOT / "data"), cfg, send=lambda cmd: injector.send(bootstrap, topic["control"], [cmd]))
-        llm = FakeLLM([[tool_use("inject_scenario", {"scenario": "trino_heavy_query", "intent": "a heavy query",
+        llm = FakeLLM([[tool_use("describe_normal", {"series_ids": att.scenario_series("trino_heavy_query", "trino-lakehouse")}, "d")],
+                       [tool_use("inject_scenario", {"scenario": "trino_heavy_query", "intent": "a heavy query",
                                                      "severity": "noticeable"}, "a")], [text("one")], [text("none")]])
         A.run_live(att, A.Agent(att, create=llm), "2026-10-07 05:00", speed=1e9, end="2026-10-07 07:00", sleep=lambda s: None)
         assert set(calls) == {topic["control"]} and len(calls) == 1 and consumers == []

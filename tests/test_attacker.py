@@ -42,6 +42,23 @@ COUNTER_MULT = {"series_id": "kube_pod_container_status_restarts_total|kafka-0",
                 "duration_min": 10}
 
 
+NOVELTY = "a failure none of the named scenarios covers, for the test"
+NO_GAP = A.Budget(min_gap_minutes=0)
+
+
+def describe(*series, id_="d"):
+    return tool_use("describe_normal", {"series_ids": list(series)}, id_)
+
+
+def touched(ds, name="trino_heavy_query", target=None):
+    probe = A.Attacker(ds, config())
+    return probe.scenario_series(name, target or A.SCENARIOS[name].targets[0])
+
+
+def effects(*items, intent="slow produce", severity="subtle", **more):
+    return {"effects": list(items), "intent": intent, "severity": severity, "novelty": NOVELTY, **more}
+
+
 def campaign(ds, script, start=START, end=END, every=120, **kw):
     attacker = A.Attacker(ds, config(wake_every_minutes=every, **kw), window=(start, end))
     agent = A.Agent(attacker, create=FakeLLM(script))
@@ -51,49 +68,103 @@ def campaign(ds, script, start=START, end=END, every=120, **kw):
 # ------------------------------------------------------------------------------------------ budget
 def test_at_most_three_a_day_and_two_active_at_once_are_enforced_in_code(ds):
     # one wake that tries four short scenarios in a row, and a third overlapping injection
-    script = [[tool_use("inject_scenario", scenario(duration_min=25), "a")],
+    script = [[describe(*touched(ds))],
+              [tool_use("inject_scenario", scenario(duration_min=25), "a")],
               [tool_use("inject_scenario", scenario(start_in=5, duration_min=25), "b")],
               [tool_use("inject_scenario", scenario(start_in=10, duration_min=25), "c")],       # 3 active at 00:10: refused
               [tool_use("inject_scenario", scenario(start_in=60, duration_min=25), "d")],       # third of the day
               [tool_use("inject_scenario", scenario(start_in=120, duration_min=25), "e")],      # fourth of the day: refused
               [text("tried five")]]
-    attacker, record = campaign(ds, script, every=720)
+    attacker, record = campaign(ds, script, every=720, budget=NO_GAP)
     assert [c["id"] for c in record["commands"]] == ["atk-001", "atk-002", "atk-003"]
     reasons = [r["reasons"][0] for r in record["rejections"]]
     assert len(reasons) == 2 and "at most 2 injections may be active" in reasons[0] and "at most 3 a day" in reasons[1]
     calls = record["wakes"][0]["tool_calls"]
-    assert [c["is_error"] for c in calls] == [False, False, True, False, True]
-    assert "rejected: budget" in calls[2]["result"]["error"]
+    assert [c["is_error"] for c in calls] == [False, False, False, True, False, True]
+    assert "rejected: budget" in calls[3]["result"]["error"]
+
+
+def test_injection_starts_must_be_three_hours_apart(ds):
+    script = [[describe(*touched(ds))],
+              [tool_use("inject_scenario", scenario(duration_min=25), "a")],
+              [tool_use("inject_scenario", scenario(start_in=179, duration_min=25), "b")],      # 2 h 59 min later: refused
+              [tool_use("inject_scenario", scenario(start_in=180, duration_min=25), "c")],      # 3 h later: accepted
+              [text("spaced")]]
+    attacker, record = campaign(ds, script, every=720)
+    assert [c["at"][11:16] for c in record["commands"]] == ["00:00", "03:00"]
+    assert "at least 3 h apart" in record["rejections"][0]["reasons"][0] and "atk-001" in record["rejections"][0]["reasons"][0]
+    assert attacker.config.budget.min_gap_minutes == 180
+
+
+def test_only_series_described_in_the_same_wake_may_be_touched(ds):
+    series = touched(ds)
+    script = [[tool_use("inject_scenario", scenario(), "a")],                                    # nothing described
+              [describe(*series[:-1])], [tool_use("inject_scenario", scenario(), "b")],          # one series short
+              [describe(GOOD["series_id"])],
+              [tool_use("inject_effects", effects(GOOD, {**GOOD, "series_id": "kafka_failed_produce_requests_per_sec|kafka-ingest",
+                                                         "op": "add", "magnitude": 0.5}), "c")],    # second effect undescribed
+              [text("partly")],
+              [tool_use("inject_effects", effects(GOOD, start_in_minutes=0), "e")], [text("next wake")]]   # wake 2: not described there
+    attacker, record = campaign(ds, script, end="2026-10-07 06:00", every=180, budget=NO_GAP)
+    w0, w1 = record["wakes"]
+    errors = [c["result"].get("error", "") for c in w0["tool_calls"] if c["tool"].startswith("inject")]
+    assert "11 of the series" in errors[0] and "1 of the series" in errors[1] and series[-1] in errors[1]
+    partly = w0["tool_calls"][-1]["result"]
+    assert partly["accepted"] and "describe_normal was not called" in partly["rejected_effects"][0]
+    assert [e["series_id"] for e in record["commands"][0]["effects"]] == [GOOD["series_id"]]
+    assert "describe_normal was not called" in w1["tool_calls"][0]["result"]["error"]                # reset at every wake
+    assert len(record["commands"]) == 1 and len(record["rejections"]) == 4
+
+
+def test_a_generic_incident_needs_novelty_and_its_overlap_with_the_scenarios_is_recorded(ds):
+    trino = [x for x in touched(ds) if x.startswith(("trino_queued", "trino_query_p95"))]
+    script = [[describe(*trino)],
+              [tool_use("inject_effects", {**effects(*({"series_id": x, "op": "mult", "shape": "flat", "magnitude": 2.0,
+                                                        "duration_min": 30} for x in trino)), "novelty": " "}, "a")],
+              [tool_use("inject_effects", effects(*({"series_id": x, "op": "mult", "shape": "flat", "magnitude": 2.0,
+                                                     "duration_min": 30} for x in trino)), "b")],
+              [text("one")]]
+    attacker, record = campaign(ds, script, every=720)
+    calls = record["wakes"][0]["tool_calls"]
+    assert calls[1]["is_error"] and "novelty" in calls[1]["result"]["error"]
+    assert "overlap" not in calls[2]["result"]                                                     # recorded, not shown
+    inj, = record["injections"]
+    assert inj["novelty"] == NOVELTY
+    assert inj["overlap"]["trino_heavy_query"] == {"shared": 2, "of_incident": 2, "jaccard": round(2 / 11, 3)}
+    assert all(v["shared"] == 0 for k, v in inj["overlap"].items() if k != "trino_heavy_query")
+    assert "inject_effects" in [d["name"] for d in A.definitions()] and \
+        "novelty" in next(d for d in A.definitions() if d["name"] == "inject_effects")["input_schema"]["required"]
 
 
 def test_an_injection_outside_the_window_or_in_the_past_is_refused(ds):
     attacker = A.Attacker(ds, config(), window=(START, END))
     attacker.now = pd.Timestamp(END, tz="UTC") - pd.Timedelta("30min")
+    attacker.described = set(touched(ds))
     out = attacker.inject_scenario(**scenario(start_in=60))
     assert "outside the campaign window" in out["error"] and attacker.commands == []
 
 
 # --------------------------------------------------------------------------------- invalid effects
 def test_invalid_effects_are_rejected_with_the_injectors_reasons_and_only_valid_ones_are_sent(ds):
-    script = [[tool_use("inject_effects", {"effects": [TOO_BIG, UNKNOWN, COUNTER_MULT, GOOD], "intent": "slow produce",
-                                           "severity": "subtle"}, "a")],
-              [tool_use("inject_effects", {"effects": [TOO_BIG, UNKNOWN], "intent": "all bad", "severity": "subtle"}, "b")],
+    script = [[describe(TOO_BIG["series_id"], COUNTER_MULT["series_id"], GOOD["series_id"])],
+              [tool_use("inject_effects", effects(TOO_BIG, UNKNOWN, COUNTER_MULT, GOOD), "a")],
+              [tool_use("inject_effects", effects(TOO_BIG, UNKNOWN, intent="all bad"), "b")],
               [tool_use("inject_effects", {"effects": [GOOD], "intent": "", "severity": "loud"}, "c")],
               [text("done")]]
     attacker, record = campaign(ds, script, every=720)
-    first, second, third = record["wakes"][0]["tool_calls"]
+    _, first, second, third = record["wakes"][0]["tool_calls"]
     assert not first["is_error"] and len(first["result"]["rejected_effects"]) == 3
     joined = " ".join(first["result"]["rejected_effects"])
     assert "above its limit of 1" in joined and "not in the catalog" in joined and "a counter only takes add" in joined
     assert second["is_error"] and "rejected" in second["result"]["error"] and third["is_error"]
-    assert "intent" in third["result"]["error"] and "severity" in third["result"]["error"]
+    assert all(w in third["result"]["error"] for w in ("intent", "severity", "novelty"))
     sent, = record["commands"]
     assert [e["series_id"] for e in sent["effects"]] == [GOOD["series_id"]]
     assert len(record["rejections"]) == 3 and record["rejections"][0]["partly_accepted"]
 
 
 def test_stop_ends_only_its_own_running_injection(ds):
-    script = [[tool_use("inject_scenario", scenario(duration_min=50), "a")], [text("one")],
+    script = [[describe(*touched(ds))], [tool_use("inject_scenario", scenario(duration_min=50), "a")], [text("one")],
               [tool_use("stop", {"injection_id": "atk-001"}, "b")], [tool_use("stop", {"injection_id": "atk-001"}, "c")],
               [tool_use("stop", {"injection_id": "nope"}, "d")], [text("stopped")]]
     attacker, record = campaign(ds, script, end="2026-10-07 01:00", every=30)
@@ -106,7 +177,7 @@ def test_stop_ends_only_its_own_running_injection(ds):
 # ------------------------------------------------------------------------------------------ record
 def test_every_wake_records_its_calls_commands_and_reasoning(ds):
     script = [[tool_use("list_scenarios", {}, "a"), tool_use("describe_normal", {"series_id": GOOD["series_id"]}, "b")],
-              [tool_use("inject_effects", {"effects": [GOOD], "intent": "a slow broker disk", "severity": "subtle"}, "c")],
+              [tool_use("inject_effects", effects(GOOD, intent="a slow broker disk"), "c")],
               [text("Injected a slow-disk incident on the produce path.")], [text("Nothing this time: one is running.")]]
     attacker, record = campaign(ds, script, end="2026-10-07 04:00")
     w0, w1 = record["wakes"]
@@ -129,15 +200,18 @@ def test_a_wake_whose_tool_budget_runs_out_still_ends_with_a_note(ds):
 # ------------------------------------------------------------------------------------------ replay
 @pytest.fixture(scope="module")
 def recorded(ds, tmp_path_factory):
-    script = [[tool_use("inject_scenario", scenario("producer_crashloop", duration_min=30), "a")],
-              [tool_use("inject_effects", {"effects": [GOOD, {**GOOD, "series_id": "kafka_failed_produce_requests_per_sec|kafka-ingest",
-                                                              "op": "add", "shape": "flat", "magnitude": 0.5, "start_in_minutes": 10}],
-                                           "intent": "a broker's disk slows down", "severity": "subtle", "start_in_minutes": 15}, "b")],
+    failed = "kafka_failed_produce_requests_per_sec|kafka-ingest"
+    script = [[describe(*touched(ds, "producer_crashloop"), GOOD["series_id"], failed)],
+              [tool_use("inject_scenario", scenario("producer_crashloop", duration_min=30), "a")],
+              [tool_use("inject_effects", effects(GOOD, {**GOOD, "series_id": failed, "op": "add", "shape": "flat", "magnitude": 0.5,
+                                                         "start_in_minutes": 10},
+                                                  intent="a broker's disk slows down", start_in_minutes=15), "b")],
               [text("two")], [text("nothing")],
+              [describe(*touched(ds, "broker_gc_pressure", "kafka-2"))],
               [tool_use("inject_scenario", scenario("broker_gc_pressure", target="kafka-2", severity="subtle", magnitude=0.6,
                                                     duration_min=150), "c")], [text("gc")],
               [tool_use("stop", {"injection_id": "atk-003"}, "d")], [text("stopped early")]]
-    _, record = campaign(ds, script, end="2026-10-07 08:00")
+    _, record = campaign(ds, script, end="2026-10-07 08:00", budget=NO_GAP)
     record_path, control = A.save(record, tmp_path_factory.mktemp("campaign"))
     return record, record_path, control
 
@@ -218,7 +292,8 @@ def test_the_mcp_attacker_group_serves_the_same_seven_tools_and_injects_through_
     async def session():
         async with Client(A.build_mcp_server(attacker)) as client:
             tools = (await client.list_tools()).tools
-            bad = await client.call_tool("inject_effects", {"effects": [TOO_BIG], "intent": "x", "severity": "subtle"})
+            await client.call_tool("describe_normal", {"series_ids": touched(ds) + [TOO_BIG["series_id"]]})
+            bad = await client.call_tool("inject_effects", effects(TOO_BIG))
             good = await client.call_tool("inject_scenario", scenario())
             return tools, bad, good
 

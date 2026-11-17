@@ -16,6 +16,13 @@ It is Claude with seven tools (`TOOLS`, also served over MCP: `python -m sentine
     list_active        its own injections: active, scheduled, and today's count against the budget
     stop               end one of its own injections now
 
+Rules in code, besides the budget: an injection may only touch series that `describe_normal` was
+called on during the same wake (so its effects are sized against what is normal; a named scenario
+needs all of its series described, `list_scenarios` lists them), and injection starts must be at
+least `min_gap_minutes` (3 h) apart. A generic incident must say, in `novelty`, which plausible real
+failure it stands for that the named scenarios do not cover; how much its series overlap with each
+named scenario's is recorded and reported, not enforced.
+
 Every injection goes the validated way: the command is checked with the injector's own rules (the
 same `Injector` code, unchanged) before it is sent, including the physical-limit check against the
 quiet world's reading at the moment the effect starts. Rejected effects and refused commands come back
@@ -66,10 +73,12 @@ You inject failures into the platform's live telemetry. You cannot see how the m
 
 You are woken at regular times. Each time, decide whether to inject something now (or a little later, with start_in_minutes), or to do nothing this time. Two ways to inject:
 - inject_scenario: one of the named scenarios, on a target, with parameters inside their ranges.
-- inject_effects: a NEW incident that the named scenarios do not cover, built from primitive effects on series (add or multiply; flat, ramp or decay; each with its own start and duration). Make it coherent: a real fault moves several related series together (for example a cause and its symptoms on neighbouring entities). Use list_platform and describe_normal to choose series and to size the effects against what is normal for them.
+- inject_effects: a NEW incident built from primitive effects on series (add or multiply; flat, ramp or decay; each with its own start and duration). It must stand for a plausible real failure that the named scenarios do NOT cover: not one of them rebuilt by hand. Say which failure and why it is not one of the named scenarios in the `novelty` field. Make it coherent: a real fault moves several related series together (for example a cause and its symptoms on neighbouring entities).
+
+Before injecting, call describe_normal on every series the injection will touch, in the same wake (it takes up to 30 series at once; list_scenarios lists the series each named scenario touches), and size the effects against what is normal for them. An injection that touches a series not described in this wake is rejected. Injection starts must be at least {gap} apart.
 
 Vary the incidents across the campaign: named scenarios and new generic incidents; different targets and parts of the platform; layer 1 (pods: CPU, memory, restarts), layer 2 (service signals: throughput, backlog, latency, errors, JVM) and layer 3 (product-specific signals); noticeable and subtle ones. Give every injection an intent (one or two sentences: the real-world failure it stands for) and a severity: noticeable or subtle.
-Effects must be physically possible (ratios stay in 0-1, memory and CPU under the pod's limit, counters only go up by whole numbers); the injector checks this and rejects what is not, and the tool tells you why. Respect the budget given at each wake.
+Use list_platform to find series and entities. Effects must be physically possible (ratios stay in 0-1, memory and CPU under the pod's limit, counters only go up by whole numbers); the injector checks this and rejects what is not, and the tool tells you why. Respect the budget given at each wake.
 
 When you are done for this wake, reply with a short plain-text note: what you did and why, or why you did nothing."""
 
@@ -80,6 +89,7 @@ class Budget:
     min_per_day: int = 1                # asked for in the prompt, reported; not enforceable
     max_per_day: int = 3                # enforced: a further injection that simulated day is refused
     max_active: int = 2                 # enforced: an injection that would make 3 active at any time is refused
+    min_gap_minutes: float = 180.0      # enforced: injection starts at least this far apart
     max_tool_calls_per_wake: int = 8
     max_seconds_per_wake: float = 90.0
     max_tokens_per_wake: int = 80_000
@@ -136,6 +146,8 @@ class Attacker:
         self.commands: list = []        # every command sent, in order: the recorded control stream
         self.injections: dict = {}      # id -> what the attacker knows of its own injection
         self.rejections: list = []      # every refused or partly refused injection, with the reasons
+        self.described: set = set()     # series describe_normal was called on in this wake (Agent.wake resets it)
+        self._scenario_series = {(n, t): self.scenario_series(n, t) for n, sc in SCENARIOS.items() for t in sc.targets}
 
     # ---------------------------------------------------------------------------------- budget
     def _intervals(self) -> list:
@@ -154,6 +166,11 @@ class Attacker:
             return f"budget: the start {_iso(at)} is outside the campaign window {_iso(self.window[0])} .. {_iso(self.window[1])}"
         if at < self.now:
             return f"budget: the start {_iso(at)} is in the past (now {_iso(self.now)})"
+        gap = pd.Timedelta(minutes=b.min_gap_minutes)
+        near = [i for i in self.injections.values() if abs(i["at"] - at) < gap]
+        if near:
+            return (f"budget: injection starts must be at least {b.min_gap_minutes / 60:g} h apart, and {near[0]['id']} starts at "
+                    f"{_iso(near[0]['at'])}; start at {_iso(near[0]['at'] + gap)} or later")
         n = len(self.today(at))
         if n >= b.max_per_day:
             return f"budget: {n} injections already start on {at:%Y-%m-%d}; at most {b.max_per_day} a day"
@@ -171,6 +188,25 @@ class Attacker:
         t = utc(t).floor("min")
         block = self.ds.at(t + ONE_MINUTE).query(list(self.catalog.series_id), start=t, end=t + ONE_MINUTE)
         return {} if block.empty else {k: float(v) for k, v in block.iloc[-1].items() if not pd.isna(v)}
+
+    def scenario_series(self, name: str, target: str) -> list:
+        """The series a named scenario changes on a target (as the injector resolves them)."""
+        spec = SCENARIOS[name]
+        return sorted(_Injection("probe", spec, target, spec.midpoints(), utc("2000-01-01"), self.validator.series_ids).series)
+
+    def overlap(self, series) -> dict:
+        """How much a generic incident's series overlap with each named scenario's (any of its targets):
+        reported, not enforced."""
+        mine = set(series)
+        out = {}
+        for name in SCENARIOS:
+            theirs = set().union(*(set(v) for (n, _), v in self._scenario_series.items() if n == name))
+            shared = mine & theirs
+            out[name] = {"shared": len(shared), "of_incident": len(mine), "jaccard": round(len(shared) / len(mine | theirs), 3)}
+        return out
+
+    def _undescribed(self, series) -> list:
+        return [x for x in series if x not in self.described]
 
     def _next_id(self) -> str:
         return f"{self.id_prefix}-{len(self.injections) + 1:03d}"         # ids count accepted injections only
@@ -215,6 +251,11 @@ class Attacker:
             bad.append(str(e))
         if bad:
             return self._reject("inject_scenario", args, bad)
+        missing = self._undescribed(self._scenario_series[(scenario, target)])
+        if missing:
+            return self._reject("inject_scenario", args, [
+                f"describe_normal was not called in this wake on {len(missing)} of the series this scenario touches: "
+                f"{missing[:12]}{' ...' if len(missing) > 12 else ''}; describe them first (up to 30 at once)"])
         at = self.now + pd.Timedelta(minutes=float(start_in_minutes))
         stop = at + pd.Timedelta(minutes=full["duration_min"])
         why = self.check_budget(at, stop)
@@ -229,9 +270,12 @@ class Attacker:
         series = _Injection(cmd["id"], spec, target, full, at, self.validator.series_ids).series
         return self._accept(cmd, "scenario", at, stop, series, args)
 
-    def inject_effects(self, effects: list, intent: str = "", severity: str = "", start_in_minutes: float = 0) -> dict:
-        args = {"effects": effects, "intent": intent, "severity": severity, "start_in_minutes": start_in_minutes}
+    def inject_effects(self, effects: list, intent: str = "", severity: str = "", novelty: str = "",
+                       start_in_minutes: float = 0) -> dict:
+        args = {"effects": effects, "intent": intent, "severity": severity, "novelty": novelty, "start_in_minutes": start_in_minutes}
         bad = self._intent(intent, severity)
+        if not (isinstance(novelty, str) and novelty.strip()):
+            bad.append("give novelty: the plausible real failure this stands for that the named scenarios do not cover")
         if not isinstance(effects, list) or not effects:
             bad.append("effects must be a non-empty list")
         if bad:
@@ -250,6 +294,9 @@ class Attacker:
                 continue
             effect = {k: v for k, v in raw.items() if k != "start_in_minutes"}
             effect["start"] = wire.iso(start)
+            if raw.get("series_id") in self.layer_of and self._undescribed([raw["series_id"]]):
+                reasons.append(f"effect {n} ({raw['series_id']}): describe_normal was not called on this series in this wake")
+                continue
             checked, why = self.validator._check_effect(effect)           # the injector's rules, unchanged
             if why is None:
                 why = self.validator._check_on_reading(checked, self._quiet_reading(start))
@@ -268,7 +315,9 @@ class Attacker:
         if reasons:                                                     # partly accepted: the rest is reported
             self.rejections.append({"at": _iso(self.now), "tool": "inject_effects", "input": args, "reasons": reasons,
                                     "id": cmd["id"], "partly_accepted": True})
-        out = self._accept(cmd, "generic", at, stop, [e["series_id"] for e, _ in valid], args)
+        series = [e["series_id"] for e, _ in valid]
+        out = self._accept(cmd, "generic", at, stop, series, args)
+        self.injections[cmd["id"]].update(novelty=novelty, overlap=self.overlap(series))   # recorded, not shown to the agent
         if reasons:
             out["rejected_effects"] = reasons
         return out
@@ -304,9 +353,23 @@ class Attacker:
                              "batch_only": bool(row.batch_only)} for p, row in pods.iterrows()},
                 "relationships": [f"{r.child_kind}:{r.child} {r.relation} {r.parent_kind}:{r.parent}" for r in rel.itertuples()]}
 
-    def describe_normal(self, series_id: str, days: int = 7) -> dict:
-        if series_id not in self.layer_of:
-            return {"error": f"unknown series {series_id!r}"}
+    def describe_normal(self, series_id: str | None = None, series_ids: list | None = None, days: int = 7) -> dict:
+        """One series in detail, or up to 30 (`series_ids`; compact when more than 4). Marks them described."""
+        ids = ([series_id] if series_id else []) + list(series_ids or [])
+        if not ids or len(ids) > 30:
+            return {"error": "give series_id or series_ids (1 to 30 series)"}
+        unknown = [x for x in ids if x not in self.layer_of]
+        if unknown:
+            return {"error": f"unknown series {unknown}"}
+        if len(ids) == 1:
+            return self._describe(ids[0], days, compact=False)
+        compact = len(ids) > 4
+        return {"source": "the quiet world's history (data directory), up to now", "days": int(min(max(days, 1), 28)),
+                "series": [self._describe(x, days, compact) for x in dict.fromkeys(ids)],
+                **({"note": "compact: by_hour_median_utc is the median of each hour 0-23"} if compact else {})}
+
+    def _describe(self, series_id: str, days: int, compact: bool) -> dict:
+        self.described.add(series_id)
         days = int(min(max(days, 1), 28))
         s = self.ds.at(self.now).query([series_id], start=self.now - pd.Timedelta(days=days), end=self.now)
         s = s[series_id].dropna() if series_id in s else pd.Series(dtype=float)
@@ -323,15 +386,23 @@ class Attacker:
             out["note"] = "a cumulative counter: shown as the increase per hour"
         by_hour = s.groupby(s.index.hour)
         out.update(last=_r(s.iloc[-1]), last_at=_iso(s.index[-1]), median=_r(s.median()), p05=_r(s.quantile(0.05)),
-                   p95=_r(s.quantile(0.95)), min=_r(s.min()), max=_r(s.max()),
-                   by_hour_of_day_utc={int(h): [_r(g.quantile(0.05)), _r(g.median()), _r(g.quantile(0.95))] for h, g in by_hour},
-                   by_hour_columns=["p05", "median", "p95"])
+                   p95=_r(s.quantile(0.95)), min=_r(s.min()), max=_r(s.max()))
+        if compact:
+            for k in ("source", "days", "readings", "whole_numbers"):
+                out.pop(k, None)
+            out["by_hour_median_utc"] = [_r(by_hour.median().get(h)) if h in by_hour.groups else None for h in range(24)]
+        else:
+            out.update(by_hour_of_day_utc={int(h): [_r(g.quantile(0.05)), _r(g.median()), _r(g.quantile(0.95))] for h, g in by_hour},
+                       by_hour_columns=["p05", "median", "p95"])
         return out
 
     def list_scenarios(self) -> dict:
         return {"scenarios": [{"name": s.name, "summary": s.summary, "targets": list(s.targets),
-                               "params": {k: [lo, hi] for k, (lo, hi) in s.params.items()}} for s in SCENARIOS.values()],
-                "note": "a parameter not given takes the middle of its range; duration_min is how long it lasts"}
+                               "params": {k: [lo, hi] for k, (lo, hi) in s.params.items()},
+                               "series_by_target": {t: self._scenario_series[(s.name, t)] for t in s.targets}}
+                              for s in SCENARIOS.values()],
+                "note": "a parameter not given takes the middle of its range; duration_min is how long it lasts. "
+                        "Describe every series of the chosen target (describe_normal) before injecting."}
 
     def list_active(self) -> dict:
         def row(i):
@@ -364,10 +435,14 @@ _START = {"type": "number", "minimum": 0, "maximum": 180, "description": "start 
 TOOLS = [
     ("list_platform", "The platform: every entity with its series ([layer, unit, physical limits]), the pods' CPU and memory "
      "limits, and how entities are related. Configuration only.", _schema({})),
-    ("describe_normal", "What is normal for one series: its quiet-world history over the last `days` days up to now, with an "
-     "hour-of-day profile (p05, median, p95) and the last reading. Use it to size effects.",
-     _schema({"series_id": {"type": "string"}, "days": {"type": "integer", "minimum": 1, "maximum": 28, "default": 7}}, ["series_id"])),
-    ("list_scenarios", "The named failure scenarios, their targets and parameter ranges.", _schema({})),
+    ("describe_normal", "What is normal for one series (series_id) or up to 30 (series_ids): the quiet-world history over the "
+     "last `days` days up to now, with an hour-of-day profile and the last reading. Use it to size effects. An injection may "
+     "only touch series described in the same wake.",
+     _schema({"series_id": {"type": "string"}, "series_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                                                              "maxItems": 30},
+              "days": {"type": "integer", "minimum": 1, "maximum": 28, "default": 7}})),
+    ("list_scenarios", "The named failure scenarios, their targets, parameter ranges and the series each one touches on each target.",
+     _schema({})),
     ("inject_scenario", "Inject a named scenario on one of its targets.",
      _schema({"scenario": {"type": "string"}, "target": {"type": "string"},
               "params": {"type": "object", "description": "parameter -> value, inside its range"},
@@ -377,7 +452,9 @@ TOOLS = [
      "duration_min, optional start_in_minutes after the injection's start. Effects that break a series' physical limits "
      "are rejected with the reason; the others are applied.",
      _schema({"effects": {"type": "array", "items": _EFFECT, "minItems": 1}, "intent": _INTENT, "severity": _SEVERITY,
-              "start_in_minutes": _START}, ["effects", "intent", "severity"])),
+              "novelty": {"type": "string", "description": "the plausible real failure this stands for that none of the named "
+                                                           "scenarios covers, and why it is not one of them"},
+              "start_in_minutes": _START}, ["effects", "intent", "severity", "novelty"])),
     ("list_active", "Your own injections (active, scheduled, ended, stopped) and today's count against the budget.", _schema({})),
     ("stop", "End one of your running injections now.", _schema({"injection_id": {"type": "string"}}, ["injection_id"])),
 ]
@@ -409,6 +486,10 @@ def dumps(x) -> str:
 
 
 # --------------------------------------------------------------------------------------- the agent
+def system_prompt(config: Config) -> str:
+    return SYSTEM.replace("{gap}", f"{config.budget.min_gap_minutes / 60:g} hours")
+
+
 def anthropic_create():
     import anthropic
     return anthropic.Anthropic(max_retries=2).messages.create
@@ -450,7 +531,8 @@ class Agent:
         today = len(a.today(now))
         lines = [f"It is now {now:%Y-%m-%d %H:%M} UTC (simulated). You are woken every {self.config.wake_every_minutes:g} minutes.",
                  f"Budget: at most {b.max_per_day} injections starting per day (aim for {b.min_per_day} to {b.max_per_day}), at most "
-                 f"{b.max_active} active at once. Today so far: {today}. Active now: {len(a.active_at(now))}.",
+                 f"{b.max_active} active at once, starts at least {b.min_gap_minutes / 60:g} h apart. Today so far: {today}. "
+                 f"Active now: {len(a.active_at(now))}.",
                  f"So far in the campaign: {len(mine)} injections; named {kinds['scenario']}, generic {kinds['generic']}; "
                  f"noticeable {sev['noticeable']}, subtle {sev['subtle']}; touching layers {layers}.",
                  *(f"- {i['id']}: {i['kind']} {i['scenario'] or ''} {', '.join(i['entities'][:4])} from {i['at']:%m-%d %H:%M} to "
@@ -465,6 +547,7 @@ class Agent:
     def wake(self, now, last_of_day: bool = False) -> dict:
         a, cfg, b = self.attacker, self.config, self.config.budget
         a.now = utc(now)
+        a.described = set()                                 # describe_normal counts only within this wake
         began = self.clock()
         messages = [{"role": "user", "content": self.wake_text(a.now, last_of_day)}]
         calls, api, stop, final, used = [], [], None, False, 0
@@ -475,7 +558,7 @@ class Agent:
                 final, stop = True, "a per-wake budget ran out"
                 messages.append({"role": "user", "content": [{"type": "text", "text": "The budget for this wake is used up; "
                                                               "tools are off. Write your short note now."}]})
-            kwargs = {"model": cfg.model, "max_tokens": cfg.max_tokens_per_call, "system": SYSTEM, "tools": definitions(),
+            kwargs = {"model": cfg.model, "max_tokens": cfg.max_tokens_per_call, "system": system_prompt(cfg), "tools": definitions(),
                       "messages": messages, "tool_choice": {"type": "none" if final else "auto"}}
             if cfg.effort:
                 kwargs["output_config"] = {"effort": cfg.effort}
@@ -558,7 +641,7 @@ def run_live(attacker: Attacker, agent: Agent, start, speed: float, end=None, sl
 
 def record_of(attacker: Attacker, agent: Agent, start, end, mode: str) -> dict:
     return {"mode": mode, "window": [_iso(start), None if end is None else _iso(end)], "config": asdict(attacker.config),
-            "system": SYSTEM, "tools": definitions(), "commands": attacker.commands, "rejections": attacker.rejections,
+            "system": system_prompt(attacker.config), "tools": definitions(), "commands": attacker.commands, "rejections": attacker.rejections,
             "injections": [{**i, "at": _iso(i["at"]), "stop": _iso(i["stop"]),
                             "stopped_at": None if i["stopped_at"] is None else _iso(i["stopped_at"]),
                             "decided_at": _iso(i["decided_at"])} for i in attacker.injections.values()],
