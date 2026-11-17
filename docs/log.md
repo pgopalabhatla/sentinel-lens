@@ -662,3 +662,27 @@ What it does not show: one week, 29 page-outs of which 25 are from 14 injections
 Dependencies: `anthropic` 2.10 (the agent) and `mcp` 2.3 (the MCP server), in a new `requirements-agents.txt`; the default tests do not need them (the MCP comparison is skipped without `mcp`).
 
 Test runs on this branch, after the last code change: `pytest` 342 passed in 58 s (39 of them new); `pytest -m kafka` 9 passed in 3 min 46 s with the broker running (one new: the dispatcher through the broker); `pytest -m llm` 1 passed in 13 s (one real investigation of the synthetic world). `pytest -m slow` was not run: nothing it covers changed.
+
+## Nov 17, the quiet world moved out of sentinel_sim/ (live-week-1 unchanged)
+
+The `--no-incidents` option is gone from `sentinel_sim/generate.py`, which is back to main's version, byte for byte. The quiet world is now made by `python -m sentinel_stream.quiet_world --days 35 --seed 11 --out data_live`. It calls the generator's own functions in the generator's order without `register_all` (the scenario calendar), then corrects the two outputs that belong to the calendar: no splits in topology.json, an empty anomaly_windows.csv with its header. `sentinel_sim/` is not modified. Why: the runner's freeze check covers `sentinel_sim/`, and with the option inside it the check read `frozen_code_identical_to_tag: False` (Nov 16 entry). It now reads **True**.
+
+One addition: the module refuses to write into a directory whose topology.json has splits, i.e. an evaluated dataset like `data/`. The generator's `write` deletes the output directory first, and on Nov 16 a stray command rewrote `data/` (identical content, by luck). CLAUDE.md now also says: never regenerate or overwrite data/ unless explicitly asked.
+
+Checks that live-week-1 still stands (nothing in `docs/results/` was rewritten):
+
+| check | result |
+|---|---|
+| the quiet world regenerated into a scratch directory (not over `data_live`), content hashes of all 18 files | identical to the `data_live` the week was run on |
+| `data/` content hashes before and after this work | unchanged |
+| live-week-1 re-scored from its saved `live-week-1-answer_key` and `live-week-1-pages` topics, entity graph from the regenerated world | Overall, By scenario and False page-outs tables identical to docs/results/live-week-1.md; per-injection rows identical apart from the two columns added later (severity, intent: "-") |
+| the same week with nothing injected, recomputed in-process on the regenerated world | the same 4 page-outs at the same times |
+| seed-7 generation (`pytest -m slow tests/test_generate.py`) | byte-identical to the evaluated dataset |
+
+So the result is 12 of 14 detected, median 12 min, 4 false page-outs, 0.57 a day, as before.
+
+`docs/live-protocol.md` still gives the old command for `data_live`. It is the pre-registered protocol and is left as committed; the new command makes the same files. The runner's result header now names the new module (it only matters if the runner were run again, which it refuses to do).
+
+Tests: the quiet-world tests moved from `tests/test_generate.py` to `tests/test_quiet_world.py`, plus two new ones (refuses to overwrite a dataset with splits; may overwrite a quiet world). `pytest` 306 passed in 60 s; `pytest -m slow tests/test_generate.py` 1 passed.
+
+Merged into `triage-agents` (a merge, not a rebase, because that branch was already pushed). With the merge, CLAUDE.md's out-of-scope line no longer says "RCA agent"; it points to the Nov 17 scope note in docs/scope-v3.md (v3.1), which the triage entry above mentions as not yet edited.

@@ -14,7 +14,9 @@ In scope:
 - A Streamlit UI and an evaluation on the test split
 
 Out of scope (possible follow-on project):
-- RCA agent, signature engine, local LLM (Ollama), incident memory, auto-remediation
+- Agents: see "Added Nov 17, 2026: a per-page triage agent" in `docs/scope-v3.md` (v3.1) for what is
+  in scope (one advisory, budgeted agent per page-out) and what stays out (signature engine, local LLM
+  (Ollama), incident memory, auto-remediation)
 - Running a real cluster; use the sample data in `data/` (this repo root is the simulator, there is no sim/ subfolder)
 
 Headline result: alert precision before vs. after feedback. Engineer labels are simulated from the
@@ -41,6 +43,7 @@ Every anomaly must carry a score (0-1), a direction, and a plain-language explan
 - NEVER import or read `labels/` from detector code. Labels are for evaluation only (`sentinel_sim.evaluate`).
 - Do NOT read test-split labels or tune on the test split until the final evaluation.
 - Tune and iterate on the train split only.
+- Never regenerate or overwrite data/ unless explicitly asked.
 
 ## Commands
 ```bash
