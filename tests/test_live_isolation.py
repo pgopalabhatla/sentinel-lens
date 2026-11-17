@@ -106,7 +106,8 @@ def test_the_triage_side_can_only_be_given_its_own_topics():
 # ------------------------------------------------------------------------------ through the broker
 @pytest.mark.kafka
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
-def test_through_the_broker_the_consumer_is_assigned_telemetry_only(monkeypatch):
+@pytest.mark.parametrize("stream_version", [1, 2])
+def test_through_the_broker_the_consumer_is_assigned_telemetry_only(monkeypatch, stream_version):
     confluent_kafka = pytest.importorskip("confluent_kafka")
     from sentinel_sim.replay import DataSource
     from sentinel_stream import broker, consumer, injector
@@ -127,7 +128,8 @@ def test_through_the_broker_the_consumer_is_assigned_telemetry_only(monkeypatch)
                                                      "target": REHEARSAL.targets[0], "params": {"duration_min": 20.0},
                                                      "at": "2026-10-07T06:00:00+00:00"}])
         publish(DataSource(ROOT / "data"), start, end, bootstrap=bootstrap, topic=topic["telemetry"], history_start="2026-09-28",
-                control=topic["control"], answer_key=topic["answer_key"], scenarios={REHEARSAL.name: REHEARSAL})
+                control=topic["control"], answer_key=topic["answer_key"], scenarios={REHEARSAL.name: REHEARSAL},
+                stream_version=stream_version)
         assert len(broker.read_topic(bootstrap, topic["answer_key"])) == 3 and len(broker.read_topic(bootstrap, topic["control"])) == 1
 
         calls = []                                              # (group.id, method, topic) for every call that names a topic

@@ -388,6 +388,15 @@ would break its limit on the reading it meets is rejected, with the reason, in t
 others in the same command are applied. `--severity` (noticeable or subtle) and `--intent` are your
 own words about the injection: the scorer reports by them and never uses them to decide a match.
 
+**Stream version 2** (`python -m sentinel_stream.publisher ... --stream-version 2`) also sends the
+data directory's logs, Kubernetes events and changes on `telemetry`, as one batch per type per minute.
+A named scenario then also writes what its failure would leave there: a crash loop's errors and
+BackOff events (and silence from the pod), a deploy or rollback record, OOMKilled events, a paused
+DAG's pause record and no trace of the run that did not happen (`sentinel_stream/evidence_live.py`).
+Generic injections stay metrics-only, and the answer key says which kind each injection is. The engine
+does not read the new types, so alerts and pages are the same as on version 1; the triage agent's
+log, event and change tools read them from the stream (`dispatcher --stream-version 2`).
+
 The scorer reads only `answer_key` and `pages`. An injection counts as detected when a page that
 pages between its start and 30 minutes after its stop holds an alert on one of its target entities
 or 1 hop from one. `python scripts/run_live_week.py --rehearsal` runs the whole chain once with a

@@ -686,3 +686,39 @@ So the result is 12 of 14 detected, median 12 min, 4 false page-outs, 0.57 a day
 Tests: the quiet-world tests moved from `tests/test_generate.py` to `tests/test_quiet_world.py`, plus two new ones (refuses to overwrite a dataset with splits; may overwrite a quiet world). `pytest` 306 passed in 60 s; `pytest -m slow tests/test_generate.py` 1 passed.
 
 Merged into `triage-agents` (a merge, not a rebase, because that branch was already pushed). With the merge, CLAUDE.md's out-of-scope line no longer says "RCA agent"; it points to the Nov 17 scope note in docs/scope-v3.md (v3.1), which the triage entry above mentions as not yet edited.
+
+## Nov 17, triage v2: evidence on the stream, two verdict rules, a baseline tool (development set)
+
+Branch `triage-v2`, off main. Three changes, then live-week-1's schedule replayed and triaged again. Nothing here was tuned on the result; the result is reported as it came. live-week-1 (stream v1) and its two result files are unchanged.
+
+**1. Stream version 2** (`publisher --stream-version 2`; version 1 stays the default and is unchanged). `telemetry` gets three new message types: `logs`, `k8s_events`, `changes`, each a batch stamped at a whole minute T holding the records of [T - 1 min, T), in the data directory's own formats, sent only when not empty. Choices to defend:
+
+- Batches, stamped at the END of their minute: like a log shipper flushing every minute, and a reader cut at time t then never sees a record from after t. One message per record was the alternative; records share seconds, so positions would not be unique.
+- At one time stamp batches sort first, before the watermark (the closing watermark promises everything before it, so the last batch must precede it). The relative order of the version-1 types is unchanged.
+- The consumer treats a batch as `engine.advance(T)`: it fires the deadlines before T, which the next minute would have fired with the same stamps. So alerts and pages are those of v1, and the restart rule (everything before the last committed message's time has been processed) still holds when that message is a batch. Tested on 12 hours of train with crashes at batches: byte-identical outputs.
+- Named scenarios write what their failure would (`sentinel_stream/evidence_live.py`), with the batch scenarios' own templates. Each record is driven by what the readings already do: a BackOff and the startup error per crash-loop restart step, OOMKilled at a leak's reset, an ISR-shrink line at each under-replicated flap, Killing/Pulled/Started at a rollout restart. A crash-looping pod writes no ordinary line while down; a paused DAG's missing run leaves no scheduler or task line and no Spark pod event. Each failure has a change record at its start (deploy, job update, a client launch, a DAG pause) and one at its stop (rollback, quota, unpause), except the Trino query, which logs its creation and cancellation instead.
+- Evidence has its own random generator, so the readings and runs sent on v2 are byte-for-byte v1's (tested per scenario). The texts name no scenario, injection id or parameter, and the records have exactly the stores' fields (tested).
+- Generic injections stay metrics-only. The answer key's `started` record carries `evidence` (the message types the injection writes to) and `stream_version`.
+- Choices of mine: rollback descriptions are neutral ("Roll back X to 1.7.3"), not the batch's diagnosis ("Rollback consumer, memory leak"); the DAG pause gets the batch scenario's pause record ("Pause X during warehouse table migration"), which matters below; deploys of the leaking consumer write no rollout events, because the v1 readings have no restart there; change ids count from chg-0001 (data_live has no changes of its own).
+
+**2. The agent.** On v2 the logs / events / changes tools read the stream (the history store before the stream started). A new tool `baseline_comparison(series_id)` gives per 5-minute bucket value, expected, wobble and z from the seasonal detector's own functions, history mode and floors, history store before the stream and streamed readings after, up to now. Checked on live-week-1: for a seasonal page it reproduces the alert's own numbers (e.g. 3.977 vs 2.509 +/- 0.125, z = +11.7). The prompt gained two general rules: noise only with a positive benign explanation found in the evidence (planned change, scheduled job, known burst, maintenance), missing or conflicting evidence means unsure; and the alerts already account for the daily pattern, so blaming traffic needs the traffic to be abnormal AND large enough.
+
+**3. Replay and triage** (`scripts/triage_dev_week_v2.py`, [docs/results/triage-dev-week-1-v2.md](results/triage-dev-week-1-v2.md)). The same 14 injections (schedule regenerated with seed 1 and checked against the protocol) on stream v2, topics `live-week-1-v2-*`. Detection: identical, as expected; the `alerts` and `pages` topics equal v1's record for record (12 of 14, median 12 min, 29 page-outs, 4 false). Three arms, so the agent change and the evidence change can be told apart (arm B was my addition, about USD 0.80):
+
+| | A: old agent, v1 | B: new agent, v1 | C: new agent, v2 |
+|---|---|---|---|
+| real called real / noise / unsure (of 25) | 18 / 4 / 3 | 20 / 0 / 5 | 12 / **10** / 3 |
+| noise called noise / unsure / real (of 4) | 4 / 0 / 0 | 1 / 3 / 0 | 1 / 3 / 0 |
+| cost (USD) | 1.06 | 0.80 | 0.97 |
+
+Reading it:
+
+- **The rules alone (A to B) did what they were meant to:** no real page-out called noise (4 to 0). The price: 3 of the 4 true noise page-outs went from noise to unsure, because nothing in the evidence explains them; that is the rule working as written.
+- **The evidence (B to C) broke the paused DAGs: 10 real page-outs called noise.** All nine hourly pages of inj-03 and the customer_agg page of inj-13, at confidence 0.85-0.9. Every note finds the pause record and calls it a deliberate, planned change, i.e. the benign explanation the first rule asks for, even nine hours and nine missed runs in. The failure "someone pauses a DAG and forgets it" is exactly a planned change gone wrong, so the rule as worded cannot see it. This is the most important finding of the run. Not fixed here: a general fix (e.g. "a change explains a page as benign only if its effect is the intended one and still within what was planned") would be written after seeing these ten cases and has to be judged on another world.
+- **Memory leaks improved:** page 34 (noise in A) is real in C. The note ties the climb to the 1.8.1 deploy and says traffic rose only about 25%, so it does not explain it (the second rule). Page 23 is unsure in B and C.
+- **The crash loops stay unsure, and that is causality, not the evidence:** both crash-loop pages page in the injection's first minute (08:07:00, 10:20:00), on the restart counter. The deploy record and the first BackOff are stamped in that same minute, so they reach the stream in the next minute's batch, after the page. The notes say so ("no k8s events, no errors, no deploy").
+- Cost and effort fell slightly with v2 (6.3 tool calls a page, against 7.0-7.1). C cites `recent_changes` on most pages.
+
+What it does not show: one week, on a world, a schedule and first-run mistakes all seen before the changes were written; 25 real page-outs, 10 of them from two injections of one scenario. The schedule has no generic injection, so the metrics-only group of the evidence split is empty. The evidence templates are the batch scenarios', written by the author of the detectors and the agent.
+
+Tests, after the last code change: `pytest` 382 passed in 74 s (new: `tests/test_live_evidence.py`, v2 tests in `test_stream_consumer.py` and `test_context_tools.py`); `pytest -m kafka` 10 passed (9 in 3 min 55 s, then the broker isolation test parametrized over both stream versions, 3 passed in 9 s); `pytest -m llm` 1 passed in 10 s. `pytest -m slow` not run: nothing it covers changed.
