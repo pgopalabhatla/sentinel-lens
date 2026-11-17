@@ -2,12 +2,16 @@
 
     python scripts/triage_dev_week_v3.py            # triage every page-out not yet noted (and its follow-up), write the report
     python scripts/triage_dev_week_v3.py --report   # only write the report from the notes already on the topics
+    python scripts/triage_dev_week_v3.py --arm E    # arm E (with the guard): investigate, then APPEND its section
 
 Arm C (scripts/triage_dev_week_v2.py, topic `live-week-1-v2-triage`): verdict real | noise | unsure on
 stream v2. Arm D: the same stream and page-outs (`live-week-1-v2-*`, already replayed), the agent with
 note schema v3 (needs_human, cause, impact; an explanation does not make a page harmless) and one
 follow-up of an "unsure" note at paging time + follow_up_minutes. Notes on `live-week-1-v2-triage-v3`.
 C's verdicts are scored with the same rule after mapping real -> yes, noise -> no, unsure -> unsure.
+Arm E: arm D plus the guard (investigator.guard: a "no" with an unknown cause or with an impact is
+converted to "unsure", which is followed up). Notes on `live-week-1-v2-triage-v3-guard`; its section is
+appended to the report written for D (and replaced if this is run again), D's part is left as it is.
 
 Development set: the week, its schedule and the mistakes of arms A-C had all been read before v3 was
 written. The answer key is read only after the investigations.
@@ -25,7 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 V2 = "live-week-1-v2-"
-TRIAGE = {"C": V2 + "triage", "D": V2 + "triage-v3"}
+TRIAGE = {"C": V2 + "triage", "D": V2 + "triage-v3", "E": V2 + "triage-v3-guard"}
+E_HEADING = "# Arm E: arm D with the guard"
 DATA = ROOT / "data_live"
 RESULT = ROOT / "docs/results/triage-dev-week-1-v3.md"
 
@@ -40,6 +45,7 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--report", action="store_true", help="do not investigate; report on the notes already written")
+    ap.add_argument("--arm", choices=("D", "E"), default="D", help="D: write the report; E: append arm E's section")
     args = ap.parse_args(argv)
 
     bootstrap = broker.DEFAULT_BOOTSTRAP
@@ -47,10 +53,10 @@ def main(argv=None) -> int:
         raise SystemExit(f"no Kafka broker at {bootstrap} (start one: docker compose up -d)")
     ds = DataSource(DATA)
     config = Config.load()
-    topics = Topics(V2 + "telemetry", V2 + "alerts", V2 + "pages", TRIAGE["D"])
+    topics = Topics(V2 + "telemetry", V2 + "alerts", V2 + "pages", TRIAGE[args.arm])
     ran = None
     if not args.report:
-        agent = Investigator(config, run_name="triage-dev-week-1-v3")
+        agent = Investigator(config, run_name="triage-dev-week-1-v3" + ("-guard" if args.arm == "E" else ""))
         began = time.monotonic()
         d = Dispatcher(KafkaTopics(bootstrap, topics), ds, agent.investigate, topics, concurrency=3, stream_version=2,
                        follow_up_minutes=config.follow_up_minutes)
@@ -65,14 +71,69 @@ def main(argv=None) -> int:
     key, pages = broker.read_topic(bootstrap, V2 + "answer_key"), broker.read_topic(bootstrap, V2 + "pages")
     scored, raw = {}, {}
     for arm, topic in TRIAGE.items():
+        if arm == "E" and args.arm != "E":
+            continue
         records = broker.read_topic(bootstrap, topic)
         raw[arm] = records
         scored[arm] = triage_score.score_needs_human(key, pages, [r for r in records if r.get("type") == "note"],
                                                      [r for r in records if r.get("type") == "follow_up"], topo, summaries)
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    RESULT.write_text(report(commit, config, scored, raw, ran))
+    if args.arm == "D":
+        RESULT.write_text(report(commit, config, scored, raw, ran))
+    else:
+        text = RESULT.read_text()
+        kept = text.split("\n" + E_HEADING + "\n")[0].rstrip("\n")
+        RESULT.write_text(kept + "\n\n" + report_e(commit, scored, raw, ran))
     print(f"saved {RESULT.relative_to(ROOT)}")
     return 0
+
+
+def report_e(commit, s, raw, ran) -> str:
+    from sentinel_stream import triage_score
+
+    D, E = s["D"], s["E"]
+    guarded = [r for r in raw["E"] if r.get("type") in ("note", "follow_up") and r.get("guard")]
+    fmt = lambda x: "-" if x is None else f"{x:.1f}"
+    pair = lambda x: x or (None, None)
+    L = [E_HEADING, "",
+         "**Development set, not a final result.** Appended after arm D. The guard was written after reading D's two "
+         "dangerous answers, so this shows it does what it was written for, on the cases it was written for.", "",
+         f"- written by `scripts/triage_dev_week_v3.py --arm E` at commit `{commit}`; notes on `{TRIAGE['E']}`",
+         "- the agent of arm D (same prompt, schema, tools, budgets, follow-up at paging + 10 min) plus the guard, in code: "
+         "a note answering needs_human \"no\" is accepted only if its cause category is not \"unknown\" AND its impact is "
+         "[\"none\"]; otherwise it is converted to \"unsure\" (recorded with the reason) and followed up. A fresh run: "
+         "the agent's answers before the guard may differ from D's",
+         *([f"- this invocation: {ran[0]} first investigations and {ran[1]} follow-ups in {ran[2]:.0f} s of wall time"] if ran else []),
+         "", "| | D first | D final | E first | E final |", "|---|---|---|---|---|"]
+    for truth, n in (("real", E["real_pages"]), ("noise", E["noise_pages"])):
+        for o in (("correct", "dangerous", "deferred") if truth == "real" else ("correct", "wasted", "deferred")):
+            L.append(f"| {truth} page-outs ({n}): {o} | {D['first'][truth][o]} | {D['final'][truth][o]} | "
+                     f"{E['first'][truth][o]} | {E['final'][truth][o]} |")
+    L += [f"| cause names the injected target (of {E['real_pages']}) | {D['first_cause_names_target']} | {D['cause_names_target']} | "
+          f"{E['first_cause_names_target']} | {E['cause_names_target']} |",
+          f"| follow-ups | | {D['follow_ups']} | | {E['follow_ups']} |",
+          f"| minutes to the final answer, median / max | | {fmt(pair(D['minutes_to_final'])[0])} / {fmt(pair(D['minutes_to_final'])[1])} | | "
+          f"{fmt(pair(E['minutes_to_final'])[0])} / {fmt(pair(E['minutes_to_final'])[1])} |",
+          f"| cost (USD, estimate, follow-ups included) | | {D['cost_total']:.2f} | | {E['cost_total']:.2f} |", "",
+          f"Notes the guard converted: {len(guarded)}.", ""]
+    if guarded:
+        truth_of = {r["page_id"]: r for r in E["rows"]}
+        L += ["| page | truth | record | cause | impact | reason |", "|---|---|---|---|---|---|"]
+        for g in guarded:
+            r = truth_of.get(g["page_id"], {})
+            L.append(f"| {r.get('page', '-')} ({r.get('scenario') or 'nothing injected'}) | {r.get('truth', '-')} | {g['type']} | "
+                     f"{g['cause']['category']} | {', '.join(g['impact']['degraded'])} | {triage_score._cell(g['guard']['reason'])} |")
+        L.append("")
+    L += ["Dangerous answers (final): " + (", ".join(f"page {r['page']} ({r['scenario']})" for r in E["dangerous"]) or "none") + ".", "",
+          "## Per page-out: D and E", "",
+          "| time (UTC) | page | truth | scenario | D first | D final | E first | E follow-up | E final | E outcome |",
+          "|---|---|---|---|---|---|---|---|---|---|"]
+    d = {r["page_id"]: r for r in D["rows"]}
+    for r in E["rows"]:
+        x = d[r["page_id"]]
+        L.append(f"| {r['time']:%b %d %H:%M} | {r['page']} | {r['truth']} | {r['scenario'] or '-'} | {x['first'] or '-'} | {x['final'] or '-'} | "
+                 f"{r['first'] or '-'} | {r['follow_up'] or '-'} | {r['final'] or '-'} | {r['final_outcome']} |")
+    return "\n".join(L) + "\n"
 
 
 def report(commit, config, s, raw, ran) -> str:
