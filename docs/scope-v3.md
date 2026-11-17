@@ -18,6 +18,18 @@ Updated Nov 2, 2026. Built on the generated sample dataset in `data/` in the rep
 
 The root-cause sections of the design doc stay for reference as a possible follow-on project.
 
+## Added Nov 17, 2026: a per-page triage agent (mentor)
+Agreed with the mentor on Nov 17: a triage agent that looks at ONE page is now in scope.
+- One fresh agent per page-out, started when the engine pages. It reads the context of that page as
+  it was at paging time (the page's alerts, the streamed metrics, topology, logs, Kubernetes events,
+  changes, DAG runs, consumer lag) through read-only tools, and writes a short triage note: real,
+  noise or unsure, with a suspected cause, the affected entities, the evidence and a next step.
+- Advisory only. The note does not change paging, detection, thresholds or feedback.
+- Hard budgets per page (tool calls, wall time, tokens) and its cost is reported.
+- Evaluated on the scripted live week (`live-week-1`), labeled a development set because that week
+  has been seen.
+- Still out: the signature engine, a local LLM, incident memory across pages, auto-remediation.
+
 ## Headline result
 Precision before and after feedback. Simulate engineer labels from the scorer's output on the
 training period. The incident labels already in the sample data are enough to score detection.
@@ -56,3 +68,4 @@ If time runs short, the ML comparison is the first thing to cut. Never cut the e
 | v1 | Oct 25, 2026 | First draft: architecture, detection, agent, feedback, UI, plan |
 | v2 | Oct 31, 2026 | Three-layer event model, mapping files, deep packs for Spark and Kafka |
 | v3 | Nov 2, 2026 | Scope reduced to anomaly detection with feedback on a generated dataset; RCA agent and LLM moved to a possible follow-on |
+| v3.1 | Nov 17, 2026 | Per-page triage agent added (advisory, budgeted), agreed with the mentor |
