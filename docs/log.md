@@ -614,3 +614,51 @@ Choices of mine beyond what was asked, to be able to defend or drop:
 Relation to the live week: this was added AFTER the single scripted run and does not touch its result. The named scenarios are unchanged: with the 14 scheduled commands, the code as it is now and the code at the commit the result was run from (`1f2b327`) give a byte-identical telemetry stream and answer key (same SHA-256 over all 10,445 messages and 28 records; readings only, no engine). The scorer's report has two more columns and one more table than the saved result file, which stays as the runner wrote it.
 
 Test runs on this branch, all after the last code change: `pytest` 303 passed in 56 s; `pytest -m kafka` 8 passed in 4 min 3 s with the broker running; `pytest -m slow` 13 passed in 99 s.
+
+## Nov 17, a triage agent per page (development set: live-week-1)
+
+Branch `triage-agents`, off `live-injection` and not off main as the task said: main has none of the publisher, consumer, injector, the `pages`/answer-key topics or the live-week result this builds on. `sentinel_lens/`, `sentinel_sim/`, the engine and the injection code are untouched. Scope: agreed with the mentor today, written into docs/scope-v3.md (v3.1): one advisory agent per page-out; the signature engine, local LLM, incident memory and auto-remediation stay out. (CLAUDE.md still lists "RCA agent" as out of scope; it was not edited.)
+
+**Evidence check first** (read from the `live-week-1-*` topics and `data_live`, nothing changed). The stream carries three message types: 10,080 `metrics`, 344 `dag_run`, 1 `watermark`. An injection changes readings only, and a DAG pause also removes the run's start and finish messages (inj-03: 9 of 9 runs missing). Logs, Kubernetes events and changes are not on the stream at all; the only copy is `data_live`, the quiet world, which knows nothing of the injections:
+
+| | during the 14 injections and the 30 minutes after each, on their target pods |
+|---|---|
+| logs | 2,675 lines, all INFO but one WARN: the crash-looping producer keeps logging "Produced batch of N records" |
+| k8s events | none, except inj-13: the paused `customer_agg` run's four Spark pods are Scheduled, Pulled, Started and Killed as if it had run. In the whole file the only reasons are Scheduled, Pulled, Started, Killing, Unhealthy: no OOMKilled, BackOff or CrashLoopBackOff, ever |
+| changes | the file is empty (no deploy record for the two slow deploys) |
+
+So for injected failures the agent has metrics and run messages only; the log, event and change tools can only say nothing or contradict the stream. Not fixed here (the task said report only); the injector would have to emit these too.
+
+What was built:
+
+- **Context tools** (`sentinel_stream/context_tools.py`): get_page, query_metric, related_entities, recent_logs, k8s_events, recent_changes, dag_runs, kafka_lag. One `Context` per page-out, cut once at its paging time: readings and run messages stamped at or before it (the engine stamps a minute's outputs with that minute, so the minute stamped `now` had been read), page records up to and including the `paged` one, the data dir through `DataSource.at(now)`. Metrics come from the streamed messages, never from `data_live`'s metrics file. query_metric returns summary statistics, minutes without a reading, the window before and 24 h earlier (only if streamed), and at most 120 averaged points. Every result says where it came from (stream, configuration, history store). A bad call comes back as an error result, never an exception.
+- **MCP server** (`mcp_server.py`, official `mcp` SDK 2.3, its low-level `Server`): the same `TOOLS` list and the same `call`, so names, descriptions and schemas cannot drift; a test lists both and compares them.
+- **Investigator** (`investigator.py`): one fresh agent per page, `claude-sonnet-5-5` at effort medium (`triage.yaml`), the Messages API with a hand-written tool loop. Budgets checked between every two steps: 15 tool calls, 120 s (a request with tools on gets "time left minus a 25 s reserve" as its timeout, so the reserve is always there for the note), 200,000 tokens (the next request's size is estimated before it is sent). When a budget runs out, tools go off (`tool_choice: none`) and the turn says so. The note is checked: verdict, confidence 0-1, every affected entity in the entity graph, every evidence item citing a call id the agent really made (results are labelled c1, c2, ...). One retry with the reasons; otherwise the note is `unsure`, confidence 0, `valid: false`. Transcripts go to `runs/` (gitignored). Server-side refusal fallback is on (`fallbacks: default`); never triggered in these runs.
+- **Dispatcher** (`dispatcher.py`): reads `pages` from the start, investigates each page-out as it was then, 3 at a time, writes notes to `triage` keyed by page id. A later merge writes a link record joining the notes of the merged pages; nothing is re-investigated. Restart: `triage` is its memory (page ids with a note, link ids), links are recomputed from the page records and only written if new. A page whose investigation was running when it died is investigated again (fresh agent); its note is written once.
+- **Isolation**: `tests/test_live_isolation.py` now also checks the four triage modules (nothing they load is on the injection side or names its topics; their settings cannot name them) and, through the broker, that the dispatcher touches only telemetry, alerts, pages and triage and writes only triage. `triage_score.py` reads the answer key and is listed on the injection side.
+
+Choices to be able to defend:
+
+- Hand-written loop instead of the SDK's tool runner: the budgets must be checked between every two steps, and the fake model in the tests drives the same loop.
+- Found while testing with the real API: when the tool budget ran out, `tool_choice: none` alone made the model end its turn with an empty answer, spending the one retry. The loop now adds "the budget is used up, write the note now" to that turn.
+- Found while writing the time test: a request with tools on, started with 30 s left, could take all of it and leave no time for the note. Hence the reserve in the timeout.
+- Evidence must cite call ids rather than free text, so "which tool results support it" can be checked mechanically.
+- The prompt says nothing about injections, simulations or which stores reflect them: the agent is told only what a real on-call assistant would be told.
+
+**Result on live-week-1, a DEVELOPMENT SET** ([docs/results/triage-dev-week-1.md](results/triage-dev-week-1.md)). The week had been run, scored and read before this, and the prompt was written in the same session; nothing was tuned on its truth (one run, reported as it came). Truth: a page-out matching an injection under the live-week rule is real, else noise.
+
+| truth \ verdict | real | noise | unsure |
+|---|---|---|---|
+| real (25) | 18 | **4** | 3 |
+| noise (4) | 0 | 4 | 0 |
+
+- Every note was valid; 25 of 25 real notes name an entity the answer key lists, 23 name the scenario's target itself (the two Trino notes name one worker pod each, not the cluster).
+- Cost: USD 1.06 for 29 pages (mean 0.037, max 0.067), 12 s per investigation on average (max 26 s), 7 tool calls on average, 2 runs stopped by the tool budget, none by time or tokens. Wall time 123 s for the week at 3 at a time.
+- **Real called noise, 4**, and why, from the notes: page 2 (producer crash loop) and page 12 (paused hourly DAG) lean on logs that contradict the stream: "the producer is sending batches normally", "the scheduler log shows the 01:05 run sent to the executor". That is the evidence gap above, not something the agent could have seen through. Pages 23 and 34 (consumer memory leaks): the notes tie the memory rise to a rise of the orders in-rate over the same hours and call it load. My reading, not checked further: the quiet world's daily traffic ramp coincides with the leak's ramp, and two signals rising together is a plausible but wrong inference. The 3 `unsure` are a crash loop, one hour of the paused DAG and a memory leak.
+- The 4 quiet-world page-outs were all called noise.
+
+What it does not show: one week, 29 page-outs of which 25 are from 14 injections (9 from one paused DAG), on a world the agent's author had seen. It is a check that the pipeline works and a list of the mistakes it makes, not an accuracy figure. A held-out number needs a further world with its own protocol, ideally with logs and events that reflect the injections.
+
+Dependencies: `anthropic` 2.10 (the agent) and `mcp` 2.3 (the MCP server), in a new `requirements-agents.txt`; the default tests do not need them (the MCP comparison is skipped without `mcp`).
+
+Test runs on this branch, after the last code change: `pytest` 342 passed in 58 s (39 of them new); `pytest -m kafka` 9 passed in 3 min 46 s with the broker running (one new: the dispatcher through the broker); `pytest -m llm` 1 passed in 13 s (one real investigation of the synthetic world). `pytest -m slow` was not run: nothing it covers changed.
