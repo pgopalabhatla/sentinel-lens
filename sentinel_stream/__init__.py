@@ -18,10 +18,14 @@ Failures injected into the live stream (README, "Inject a failure"; docs/live-pr
 
     scenarios_live.py   seven failure scenarios as lists of effects on named series
     injector.py         applies them to what the publisher sends, and records what was injected  (CLI)
+    evidence_live.py    stream v2: the logs, Kubernetes events and changes each failure writes
     live_score.py       were the injections paged for, and how many pages were for nothing       (CLI)
 
 The injection side is kept apart from the detection side: nothing the consumer loads imports these
-three modules or knows their topics (tests/test_live_isolation.py).
+modules or knows their topics (tests/test_live_isolation.py).
+
+Stream version 2 (`publisher --stream-version 2`) also carries logs, Kubernetes events and changes as
+minute batches (wire.py); version 1, the one live-week-1 was run on, does not.
 """
 from sentinel_stream.engine import FROZEN_DEMOTED_GROUPS, StreamEngine
 from sentinel_stream.events import AlertEvent, PageEvent, RunFinished, RunStarted

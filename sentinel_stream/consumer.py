@@ -97,7 +97,12 @@ class Processor:
             events = self.engine.on_minute(ts, message["values"])
         elif kind == wire.DAG_RUN:
             events = self.engine.on_run_event(wire.run_event(message))
-        elif kind == wire.WATERMARK:
+        elif kind == wire.WATERMARK or wire.is_evidence(message):
+            # Stream v2's logs / events / changes batches are not read by the engine; they only tell it
+            # that time has reached `ts`. advance(ts) fires the deadlines before ts, which the next minute
+            # would fire anyway (with the same time stamps), so the outputs are those of version 1. It also
+            # keeps the restart rule true: when a batch is the last committed message, every deadline
+            # before its time has fired.
             events = self.engine.advance(ts)
         else:
             raise ValueError(f"unknown telemetry message type {kind!r}")

@@ -218,6 +218,56 @@ def test_restart_after_the_end_writes_nothing_more(ds, telemetry, uninterrupted)
     assert log.outputs() == want.outputs() and again.processed == 1
 
 
+# ---------------------------------------------------------------------------------------- stream v2
+@pytest.fixture(scope="module")
+def telemetry_v2(ds):
+    from sentinel_stream.publisher import sendable
+    return [m for m in messages(ds, START, END, HISTORY_START, version=2) if sendable(m)]
+
+
+@needs_data
+def test_stream_v2_is_stream_v1_plus_the_data_dirs_logs_events_and_changes_in_minute_batches(ds, telemetry, telemetry_v2):
+    assert [m for m in telemetry_v2 if not wire.is_evidence(m)] == telemetry
+    positions = [wire.position(m) for m in telemetry_v2]
+    assert positions == sorted(positions) and len(set(positions)) == len(positions)
+    assert telemetry_v2[-1]["type"] == "watermark"
+    for kind, n in ((wire.LOGS, len(ds.logs(start=START, end=END, limit=None))),
+                    (wire.K8S_EVENTS, len(ds.k8s_events(start=START, end=END))), (wire.CHANGES, len(ds.changes(start=START, end=END)))):
+        batches = [m for m in telemetry_v2 if m["type"] == kind]
+        assert sum(len(wire.records_of(m)) for m in batches) == n and all(wire.records_of(m) for m in batches)
+        for m in batches:                                           # a batch stamped T holds [T - 1 min, T)
+            t = wire.event_time(m)
+            assert all(t - pd.Timedelta("1min") <= wire.record_time(r) < t for r in wire.records_of(m))
+    assert sum(m["type"] == wire.LOGS for m in telemetry_v2) > 600 and any(m["type"] == wire.K8S_EVENTS for m in telemetry_v2)
+
+
+@needs_data
+def test_on_stream_v2_the_consumer_says_exactly_what_it_says_on_stream_v1_also_after_crashes(ds, telemetry_v2, uninterrupted):
+    """The batches only advance the engine's clock. Crash at batches: with the last committed message a
+    batch, the restart clock is that batch's time, and nothing may be lost or said twice."""
+    want, _ = uninterrupted
+    log = Log(telemetry_v2)
+    processor = recover(ds, START, history_start=HISTORY_START)
+    n_outputs = []
+    for i, m in enumerate(log.telemetry):
+        records = processor.handle(m)
+        n_outputs.append(len(records))
+        log.write(records)
+        log.committed = i + 1
+    assert log.outputs() == want.outputs()
+
+    batch = [i for i, m in enumerate(telemetry_v2) if wire.is_evidence(m)]
+    before_busy = [i for i in batch if i + 1 < len(n_outputs) and n_outputs[i + 1] >= 2]   # a batch right before outputs
+    crashes = sorted({(before_busy[0] + 1, "before-outputs"), (before_busy[len(before_busy) // 2], "before-commit"),
+                      (before_busy[-1] + 1, "mid-outputs"), (batch[len(batch) // 3], "before-commit")})
+    log = Log(telemetry_v2)
+    for crash in crashes:
+        consume(log, ds, crash)
+    final = consume(log, ds)
+    assert log.committed == len(telemetry_v2) and final.pending_said() == 0
+    assert log.outputs() == want.outputs()
+
+
 @needs_data
 def test_a_restart_that_would_say_something_else_stops_instead_of_writing(ds, telemetry, uninterrupted):
     _, n_outputs = uninterrupted

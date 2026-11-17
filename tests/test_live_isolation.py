@@ -27,7 +27,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INJECTION_SIDE = {"sentinel_stream.injector", "sentinel_stream.scenarios_live", "sentinel_stream.live_score",
-                  "sentinel_stream.publisher", "sentinel_stream.triage_score"}
+                  "sentinel_stream.publisher", "sentinel_stream.triage_score", "sentinel_stream.evidence_live"}
 FORBIDDEN = re.compile(r"answer[_\- ]?key|\bcontrol\b", re.IGNORECASE)
 TRIAGE_SIDE = ["sentinel_stream.context_tools", "sentinel_stream.investigator", "sentinel_stream.dispatcher",
                "sentinel_stream.mcp_server"]

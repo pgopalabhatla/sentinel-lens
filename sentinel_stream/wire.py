@@ -8,6 +8,17 @@ Topic `telemetry` (one partition), every message has a `type`:
     {"type": "dag_run", "event": "finish", "ts": ..., "dag_id", "run_id", "state"}
     {"type": "watermark", "ts": ...}       the publisher has sent everything stamped before `ts`
 
+Stream version 2 adds what a log shipper, the Kubernetes event watcher and the deploy log would send.
+Each is a BATCH stamped at a whole minute T holding the records stamped in [T - 1 min, T), sent only
+when it is not empty (records are in the data directory's own formats):
+
+    {"type": "logs",       "ts": T, "lines":   [{"ts", "pod", "level", "logger", "message"}, ...]}
+    {"type": "k8s_events", "ts": T, "events":  [{"ts", "type", "reason", "involved_object", "message", "count"}, ...]}
+    {"type": "changes",    "ts": T, "changes": [{"change_id", "ts", "kind", "target", "details", "author", "description"}, ...]}
+
+A batch stamped T carries nothing from T on, so whoever reads the stream up to a time sees no record
+from after it. Version 1 (the default) has none of these; the engine does not read them either way.
+
 Topic `alerts`: one AlertEvent per message.  Topic `pages`: one PageEvent per message.
 
 `ts` is EVENT time: when the thing happened in the monitored platform, not when the message was
@@ -16,7 +27,9 @@ time T" can be looked up by the broker.
 
 Position. Messages on `telemetry` are in one fixed order, the order `sentinel_stream.replay` feeds
 the in-process engine: by event time, and at the same time a watermark first, then run starts, then
-run finishes, then the minute of metrics. `position(message)` is that sort key. The consumer keeps the
+run finishes, then the minute of metrics. Version 2's batches stamped T come before all of those (the
+batch at the end of the stream is sent before the closing watermark, which promises everything
+before it). `position(message)` is that sort key. The consumer keeps the
 position of the last message it processed and skips anything at or before it; event time alone is
 not enough, because two messages can carry the same time (two runs ending in the same second, or a
 run starting exactly on the minute).
@@ -36,7 +49,11 @@ from sentinel_lens.alerts import Alert
 from sentinel_stream.events import AlertEvent, PageEvent, RunFinished, RunStarted, utc
 
 METRICS, DAG_RUN, WATERMARK = "metrics", "dag_run", "watermark"
-_RANK = {WATERMARK: 0, "start": 1, "finish": 2, METRICS: 3}
+LOGS, K8S_EVENTS, CHANGES = "logs", "k8s_events", "changes"
+EVIDENCE = {LOGS: "lines", K8S_EVENTS: "events", CHANGES: "changes"}      # stream v2: type -> the list it carries
+STREAM_VERSIONS = (1, 2)
+# order at one time stamp; the relative order of the version-1 types is the one they always had
+_RANK = {LOGS: 0, K8S_EVENTS: 1, CHANGES: 2, WATERMARK: 3, "start": 4, "finish": 5, METRICS: 6}
 
 
 def iso(ts) -> str:
@@ -77,6 +94,23 @@ def run_message(event) -> dict:
 
 def watermark_message(ts) -> dict:
     return {"type": WATERMARK, "ts": iso(ts)}
+
+
+def evidence_message(kind: str, ts, records: list) -> dict:
+    """A stream-v2 batch: `records` are stamped in [ts - 1 min, ts)."""
+    return {"type": kind, "ts": iso(ts), EVIDENCE[kind]: list(records)}
+
+
+def is_evidence(message: dict) -> bool:
+    return message["type"] in EVIDENCE
+
+
+def records_of(message: dict) -> list:
+    return message[EVIDENCE[message["type"]]]
+
+
+def record_time(record: dict) -> pd.Timestamp:
+    return utc(record["ts"])
 
 
 # -------------------------------------------------------------------------------- telemetry: read

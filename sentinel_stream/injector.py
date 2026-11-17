@@ -25,6 +25,9 @@ Two topics belong to the injection side and to nobody else:
                  its `stopped` record says for how many minutes a reading had to be held at a limit.
                  `intent` and `severity` are copied from the command.
                    {"event": "published", "start", "end"}             # the span of the stream, at its end
+                 Stream version 2 adds "stream_version": 2 to `started` and `published`, and to `started`
+                 "evidence": the message types the injection writes to: ["metrics", "logs", "k8s_events",
+                 "changes"] or a part of it for a named scenario, ["metrics"] for a generic injection.
 
 The consumer and the engine must never read either of them: they would be reading the answer. They
 do not know these topics exist (tests/test_live_isolation.py). Only the publisher reads `control`,
@@ -56,6 +59,12 @@ not applied and are reported in the answer key with the reason; the valid ones o
 are applied. Readings move after that moment, so while an effect runs its result is also held inside
 the limits, and the answer key counts the minutes in which that was needed.
 
+Stream version 2 (`evidence=True`). The stream also carries logs, Kubernetes events and changes as
+minute batches (wire.py). A named scenario adds the records its failure would produce and removes the
+ones that would not exist (a crash-looping pod's normal lines, a missing run's lines and pod events);
+evidence_live.py has them. Batches start and stop nothing, and the evidence draws from its own random
+generator, so the readings and runs sent are exactly version 1's. Generic injections add no evidence.
+
 Two things are computed here instead of being declared in the scenario, because they depend on the
 reading:
   * a ramp with `reset_at` that reaches it starts again from zero the minute after and fires the
@@ -76,9 +85,9 @@ import zlib
 import numpy as np
 import pandas as pd
 
-from sentinel_stream import wire
+from sentinel_stream import evidence_live, wire
 from sentinel_stream.events import utc
-from sentinel_stream.scenarios_live import SCENARIOS, Effect, Scenario
+from sentinel_stream.scenarios_live import RESTARTS, SCENARIOS, Effect, Scenario
 
 CONTROL_TOPIC = "control"
 ANSWER_KEY_TOPIC = "answer_key"
@@ -242,7 +251,10 @@ class _Injection:
                 after += [_Run(e, sid, t0, t0 + minutes(e.minutes), self._amount(e), self.rng) for sid in self._resolve(e.series)]
         self.runs = after
 
-    def apply(self, values: dict, ts, counters: dict) -> None:
+    def apply(self, values: dict, ts, counters: dict) -> list:
+        """Change `values` for minute `ts`. Returns what happened to pods this minute, for stream v2's
+        evidence: ("restart", pod) once per restart-counter step, ("oom", pod) per leak that reset."""
+        happened = []
         self.runs = [r for r in self.runs if ts < r.end]
         todo = list(self.runs)
         while todo:
@@ -253,14 +265,18 @@ class _Injection:
                 n = run.steps(ts)
                 if n:
                     counters[run.sid] = counters.get(run.sid, 0) + n
+                    if run.sid.startswith(RESTARTS):
+                        happened += [("restart", run.sid[len(RESTARTS):])] * n
             elif run.apply(values, ts):
                 hit = run.sid.split("|", 1)[1]
+                happened.append(("oom", hit))
                 for e in self.scenario.on_reset:             # they start this very minute
                     t0 = ts + minutes(e.delay_min)
                     new = [_Run(e, sid, t0, t0 + minutes(e.minutes), self._amount(e), self.rng)
                            for sid in self._resolve(e.series, hit=hit)]
                     self.runs += new
                     todo += new
+        return happened
 
     def done(self) -> bool:
         return self.stopped and not self.runs
@@ -273,13 +289,23 @@ class Injector:
     scenarios        {name: Scenario}
     unit_of          {series_id: unit}, for the physical limits of generic effects
     memory_limit_of  {pod: bytes}
+    evidence         stream v2: a named scenario also adds the logs, Kubernetes events and changes its
+                     failure would produce (evidence_live.py) to the stream's batches, and removes the
+                     lines a down pod or a missing run would not have written. False: version 1.
+    namespace_of     {pod: namespace}, for the events of stream v2
     """
 
     def __init__(self, series_ids, entity_of: dict, cpu_limit_of: dict | None = None, scenarios: dict = SCENARIOS,
-                 unit_of: dict | None = None, memory_limit_of: dict | None = None):
+                 unit_of: dict | None = None, memory_limit_of: dict | None = None, evidence: bool = False,
+                 namespace_of: dict | None = None):
         self.series_ids = list(series_ids)
         self.entity_of, self.cpu_limit_of, self.scenarios = entity_of, cpu_limit_of or {}, scenarios
         self.unit_of, self.memory_limit_of = unit_of or {}, memory_limit_of or {}
+        self.evidence, self.namespace_of = evidence, namespace_of or {}
+        self._pending = {kind: [] for kind in wire.EVIDENCE}     # records added, waiting for their batch
+        self._floor = None                   # the minute of the last version-1 message
+        self._changes = 0                    # change records written (for their ids)
+        self._dropped_windows: dict = {}     # (dag_id, run_id) -> [start, finish or None] of runs that do not happen
         self._known_series = set(self.series_ids)
         self._waiting: list = []             # inject commands not yet due
         self._stops: list = []               # stop commands not yet due
@@ -290,12 +316,66 @@ class Injector:
         self._last: dict = {}                # the latest readings sent by the data, before any injection
 
     @classmethod
-    def for_data(cls, ds, scenarios: dict = SCENARIOS) -> "Injector":
+    def for_data(cls, ds, scenarios: dict = SCENARIOS, evidence: bool = False) -> "Injector":
         """From the replay API: the series catalog and the pods' limits (configuration, not telemetry)."""
         catalog, pods = ds.series(), ds.pods()
         return cls(list(catalog.series_id), {s: f"{k}:{e}" for s, k, e in zip(catalog.series_id, catalog.entity_kind, catalog.entity)},
                    dict(zip(pods.pod, pods.cpu_limit_cores.astype(float))), scenarios,
-                   dict(zip(catalog.series_id, catalog.unit)), dict(zip(pods.pod, pods.memory_limit_bytes.astype(float))))
+                   dict(zip(catalog.series_id, catalog.unit)), dict(zip(pods.pod, pods.memory_limit_bytes.astype(float))),
+                   evidence, dict(zip(pods.pod, pods.namespace)))
+
+    # ------------------------------------------------------------------------- stream v2: evidence
+    def namespace(self, pod: str) -> str:
+        return self.namespace_of.get(pod, "default")
+
+    def change_id(self) -> str:
+        self._changes += 1
+        return f"chg-{self._changes:04d}"
+
+    def _attach(self, inj) -> None:
+        inj.evidence = evidence_live.for_injection(inj, self) if self.evidence else None
+        if inj.evidence is not None:
+            inj.evidence.begin()
+            self._queue(inj)
+
+    def _queue(self, inj) -> None:
+        """Move what the injection's evidence wrote into the waiting records. Nothing is stamped
+        before the current minute: the batches up to it have been sent."""
+        for kind, record in inj.evidence.take():
+            if self._floor is not None and wire.record_time(record) < self._floor:
+                record["ts"] = self._floor.strftime("%Y-%m-%dT%H:%M:%SZ")
+            self._pending[kind].append(record)
+
+    def _finish(self, inj, at) -> None:
+        inj.finish(at)
+        if getattr(inj, "evidence", None) is not None:
+            inj.evidence.finish(at)
+            self._queue(inj)
+
+    def _batch(self, message: dict) -> dict:
+        """A batch of logs / events / changes stamped T: less what a running failure silenced, plus
+        the waiting records stamped before T, in time order."""
+        kind, stamp = message["type"], wire.event_time(message)
+        kept = [r for r in wire.records_of(message) if not self._silenced(kind, r)]
+        due = [r for r in self._pending[kind] if wire.record_time(r) < stamp]
+        self._pending[kind] = [r for r in self._pending[kind] if wire.record_time(r) >= stamp]
+        return {**message, wire.EVIDENCE[kind]: sorted(kept + due, key=wire.record_time)}
+
+    def _silenced(self, kind: str, record: dict) -> bool:
+        t = wire.record_time(record)
+        for inj in self._live:
+            ev = getattr(inj, "evidence", None)
+            if ev is not None and inj.start <= t < inj.stop and ev.silences(kind, record):
+                return True
+        if kind == wire.CHANGES:
+            return False
+        name = record["pod"] if kind == wire.LOGS else record["involved_object"]["name"]
+        for (dag, run_id), (began, ended) in self._dropped_windows.items():
+            if kind == wire.LOGS and run_id in record["message"] and dag in record["message"]:
+                return True                  # the scheduler and the worker never handled this run
+            if name.startswith(dag.replace("_", "-") + "-") and began <= t and (ended is None or t <= ended + 15 * ONE_MINUTE):
+                return True                  # its Spark pods were never started
+        return False
 
     # ---------------------------------------------------------------------------- physical limits
     def limits_of(self, sid: str) -> tuple:
@@ -406,8 +486,14 @@ class Injector:
 
     # ---------------------------------------------------------------------------------- the stream
     def apply(self, message: dict) -> tuple:
-        """One telemetry message -> (the message to send, or None if it is not sent; answer-key records)."""
+        """One telemetry message -> (the message to send, or None if it is not sent; answer-key records).
+
+        A stream-v2 batch (logs / events / changes) starts and stops nothing: injections begin and end
+        on the version-1 messages exactly as in version 1, so the readings are the same in both."""
+        if wire.is_evidence(message):
+            return (self._batch(message) if self.evidence else message), []
         ts = wire.event_time(message)
+        self._floor = ts.floor("min")
         records = []
         if message["type"] == wire.METRICS:
             self._last = message["values"]
@@ -422,11 +508,11 @@ class Injector:
             if not waiting:                  # otherwise it has not started yet: keep the stop for later
                 self._stops.remove(item)
                 if inj is not None:
-                    inj.finish(max(inj.start, ts if item[0] is None else item[0]))
+                    self._finish(inj, max(inj.start, ts if item[0] is None else item[0]))
                     records.append(self._stopped(inj, "stop command"))
         for inj in self._live:
             if not inj.stopped and ts >= inj.planned_stop:
-                inj.finish(inj.planned_stop)
+                self._finish(inj, inj.planned_stop)
                 records.append(self._stopped(inj, "duration"))
 
         if message["type"] == wire.DAG_RUN:
@@ -434,6 +520,9 @@ class Injector:
             if message["event"] == "start" and any(i.scenario.pauses_dag and not i.stopped and i.target == message["dag_id"]
                                                     for i in self._live):
                 self._dropped_runs.add(key)
+                self._dropped_windows[key] = [ts, None]
+            elif message["event"] == "finish" and key in self._dropped_windows:
+                self._dropped_windows[key][1] = ts
             out = None if key in self._dropped_runs else message
         elif message["type"] == wire.METRICS and (self._live or self._counters):
             out = self._metrics(message, ts)
@@ -449,6 +538,7 @@ class Injector:
         if "scenario" in item:
             inj = _Injection(item["id"], item["scenario"], item["target"], item["params"], ts if at is None or at < ts else at,
                              self.series_ids)
+            self._attach(inj)
             records.append({**self._started(inj), **item["note"]})
             return inj
         applied, rejected = [], list(item["rejected"])
@@ -465,6 +555,7 @@ class Injector:
             records.append({"event": "rejected", "id": item["id"], "reasons": [r["reason"] for r in rejected], **item["note"]})
             return None
         inj = _Injection.custom(item["id"], applied, min(e["t0"] for e in applied), self.series_ids, self.limits_of)
+        self._attach(inj)                    # a generic injection has no evidence: metrics only
         record = self._started(inj)
         record["effects"] = [{"series_id": e["series_id"], "op": e["op"], "shape": e["shape"], "magnitude": e["magnitude"],
                               "start": wire.iso(e["t0"]), "stop": wire.iso(e["t1"])} for e in applied]
@@ -482,7 +573,10 @@ class Injector:
         before = message["values"]
         values = dict(before)
         for inj in self._live:
-            inj.apply(values, ts, self._counters)
+            happened = inj.apply(values, ts, self._counters)
+            if getattr(inj, "evidence", None) is not None and not inj.stopped:
+                inj.evidence.minute(ts, happened)
+                self._queue(inj)
         for sid, n in self._counters.items():
             if sid in values:
                 values[sid] = values[sid] + n
@@ -500,16 +594,21 @@ class Injector:
         series += [THROTTLED + s[len(CPU):] for s in inj.series
                    if s.startswith(CPU) and THROTTLED + s[len(CPU):] in self.series_ids and s[len(CPU):] in self.cpu_limit_of]
         entities = {self.entity_of[s] for s in series} | ({f"dag:{inj.target}"} if inj.scenario.pauses_dag else set())
-        return {"event": "started", "id": inj.id, "scenario": inj.scenario.name, "target": inj.target, "params": inj.params,
-                "series": sorted(set(series)), "entities": sorted(entities), "start": wire.iso(inj.start),
-                "stop": wire.iso(inj.planned_stop)}
+        record = {"event": "started", "id": inj.id, "scenario": inj.scenario.name, "target": inj.target, "params": inj.params,
+                  "series": sorted(set(series)), "entities": sorted(entities), "start": wire.iso(inj.start),
+                  "stop": wire.iso(inj.planned_stop)}
+        if self.evidence:                    # stream v2: what the injection changed, so results can be split by it
+            ev = getattr(inj, "evidence", None)
+            record.update(stream_version=2, evidence=list(ev.kinds if ev is not None else evidence_live.METRICS_ONLY))
+        return record
 
     def active(self) -> list:
         return [i.id for i in self._live if not i.stopped]
 
 
-def published_record(start, end) -> dict:
-    return {"event": "published", "start": wire.iso(start), "end": wire.iso(end)}
+def published_record(start, end, stream_version: int = 1) -> dict:
+    record = {"event": "published", "start": wire.iso(start), "end": wire.iso(end)}
+    return record if stream_version == 1 else {**record, "stream_version": stream_version}
 
 
 # ------------------------------------------------------------------------------------------ CLI

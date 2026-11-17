@@ -27,20 +27,72 @@ messages in exactly the order `messages()` yields them, which is the order the i
 from __future__ import annotations
 
 import argparse
+import heapq
 import sys
 import time
 from typing import Iterator
+
+import pandas as pd
 
 from sentinel_stream import wire
 from sentinel_stream.events import utc
 from sentinel_stream.replay import run_events
 
+ONE_MINUTE = pd.Timedelta("1min")
 
-def messages(ds, start, end=None, history_start=None) -> Iterator[dict]:
+
+def messages(ds, start, end=None, history_start=None, version: int = 1) -> Iterator[dict]:
     """Every telemetry message stamped start <= t < end, in stream order, then the watermark at
-    `end`. Default end: the end of the data."""
+    `end`. Default end: the end of the data. Version 2 also carries the data directory's logs,
+    Kubernetes events and changes as minute batches (wire.py), merged in stream order."""
+    if version not in wire.STREAM_VERSIONS:
+        raise ValueError(f"stream version must be one of {wire.STREAM_VERSIONS}, got {version!r}")
     start = utc(start)
     end = ds.now if end is None else min(utc(end), ds.now)
+    if version == 1:
+        yield from _version_1(ds, start, end, history_start)
+    else:
+        yield from heapq.merge(_version_1(ds, start, end, history_start), evidence_batches(ds, start, end), key=wire.position)
+
+
+def sendable(message) -> bool:
+    """False for a message that is not sent: a run dropped by an injection, or a batch left empty."""
+    return message is not None and not (wire.is_evidence(message) and not wire.records_of(message))
+
+
+def _iso_s(ts) -> str:
+    return utc(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def evidence_batches(ds, start, end) -> Iterator[dict]:
+    """Stream v2: the data directory's log lines, Kubernetes events and changes stamped
+    start <= t < end, in their own formats, as one batch per type for every minute stamp T in
+    (start, end]: the batch stamped T holds what is stamped in [T - 1 min, T). Empty batches are
+    yielded too, so that records added by an injection always have a batch to go in; `sendable`
+    keeps a batch that is still empty from being sent."""
+    start, end = utc(start), utc(end)
+    view = ds.at(end)
+    logs = view.logs(start=start, end=end, limit=None)
+    events = view.k8s_events(start=start, end=end)
+    by_stamp = {wire.LOGS: {}, wire.K8S_EVENTS: {}, wire.CHANGES: {}}
+
+    def put(kind, ts, record):
+        by_stamp[kind].setdefault(utc(ts).floor("min") + ONE_MINUTE, []).append(record)
+
+    for r in logs.itertuples():
+        put(wire.LOGS, r.ts, {"ts": _iso_s(r.ts), "pod": r.pod, "level": r.level, "logger": r.logger, "message": r.message})
+    for r in events.itertuples():
+        put(wire.K8S_EVENTS, r.ts, {"ts": _iso_s(r.ts), "type": r.type, "reason": r.reason,
+                                    "involved_object": {"kind": r.object_kind, "name": r.object, "namespace": r.namespace},
+                                    "message": r.message, "count": int(r.count)})
+    for c in view.changes(start=start, end=end):
+        put(wire.CHANGES, c["ts"], dict(c))
+    for stamp in pd.date_range(start + ONE_MINUTE, end, freq="1min"):
+        for kind in (wire.LOGS, wire.K8S_EVENTS, wire.CHANGES):
+            yield wire.evidence_message(kind, stamp, by_stamp[kind].get(stamp, []))
+
+
+def _version_1(ds, start, end, history_start) -> Iterator[dict]:
     events = run_events(ds, start, end, history_start)
     i = 0
     for ts, row in ds.at(end).stream(start, end):
@@ -54,7 +106,7 @@ def messages(ds, start, end=None, history_start=None) -> Iterator[dict]:
 
 
 def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", history_start=None,
-            log=None, control=None, answer_key=None, scenarios=None) -> int:
+            log=None, control=None, answer_key=None, scenarios=None, stream_version: int = 1) -> int:
     """Send `messages(ds, start, end)` to `topic`. speed=None: as fast as possible. Returns the
     number of messages sent, after every one of them has been acknowledged by the broker.
 
@@ -63,7 +115,10 @@ def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", 
     what it injected to `answer_key`. Commands already on `control` when the publisher starts are
     used only if they carry a time `at` that is not before `start` (a schedule loaded in advance);
     commands without a time count only if they arrive while it runs. With no command, the messages
-    sent are exactly `messages(ds, start, end)`.
+    sent are exactly `messages(ds, start, end)` (less the empty batches of version 2).
+
+    stream_version 2: the stream also carries logs, Kubernetes events and changes, and a named
+    scenario adds the ones its failure would produce (evidence_live.py).
     """
     from confluent_kafka import Consumer, Producer, TopicPartition
 
@@ -88,7 +143,7 @@ def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", 
         from sentinel_stream.scenarios_live import SCENARIOS
 
         broker.ensure_topics(bootstrap, [topic, control, answer_key])
-        injector = Injector.for_data(ds, scenarios or SCENARIOS)
+        injector = Injector.for_data(ds, scenarios or SCENARIOS, evidence=stream_version >= 2)
 
         def take(cmd, scheduled_only=False):
             if scheduled_only and (cmd.get("at") is None or utc(cmd["at"]) < start):
@@ -119,7 +174,7 @@ def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", 
     began = time.monotonic()
     sent, hour = 0, None
     try:
-        for message in messages(ds, start, end, history_start):
+        for message in messages(ds, start, end, history_start, stream_version):
             ts = wire.event_time(message)
             if speed is not None:
                 wait = (ts - start).total_seconds() / speed - (time.monotonic() - began)
@@ -136,8 +191,8 @@ def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", 
                     log(f"answer key: {record}")
                 if records:
                     producer.flush()                    # the answer key is durable before the readings it describes
-                if message is None:                     # a run that does not happen while its DAG is paused
-                    continue
+            if not sendable(message):                   # a run that does not happen while its DAG is paused,
+                continue                                # or a batch with nothing in it
             while True:
                 try:
                     producer.produce(topic, value=wire.dumps(message), key=message["type"], timestamp=wire.millis(ts),
@@ -152,8 +207,8 @@ def publish(ds, start, end=None, speed=None, bootstrap=None, topic="telemetry", 
                 hour = ts.floor("h")
                 log(f"published up to {ts:%Y-%m-%d %H:%M} ({sent} messages)")
         if injector is not None:
-            producer.produce(answer_key, value=wire.dumps(published_record(start, end_ts)), key="published",
-                             on_delivery=delivered)
+            record = published_record(start, end_ts, stream_version)
+            producer.produce(answer_key, value=wire.dumps(record), key="published", on_delivery=delivered)
         producer.flush()
         check()
         return sent
@@ -179,6 +234,8 @@ def main(argv=None) -> int:
     ap.add_argument("--control-topic", default="control", help="where inject / stop commands arrive (injector.py)")
     ap.add_argument("--answer-key-topic", default="answer_key", help="where the publisher records what it injected")
     ap.add_argument("--no-injection", action="store_true", help="do not read commands; send the data as it is")
+    ap.add_argument("--stream-version", type=int, default=1, choices=wire.STREAM_VERSIONS,
+                    help="2: also send logs, Kubernetes events and changes (and what named injections add to them)")
     args = ap.parse_args(argv)
     speed = None if args.speed == "max" else float(args.speed)
     if speed is not None and speed <= 0:
@@ -190,7 +247,7 @@ def main(argv=None) -> int:
     inject = not args.no_injection
     sent = publish(DataSource(args.data), args.start, args.end, speed, args.bootstrap, args.topic,
                    args.history_start, log, control=args.control_topic if inject else None,
-                   answer_key=args.answer_key_topic if inject else None)
+                   answer_key=args.answer_key_topic if inject else None, stream_version=args.stream_version)
     log(f"done: {sent} messages on {args.topic!r}")
     return 0
 

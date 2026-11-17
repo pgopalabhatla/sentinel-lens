@@ -30,8 +30,9 @@ them into symptoms. Here the symptoms are written down directly; each scenario l
 in `approximations`. Two things are still computed, not declared, because they depend on the reading
 itself: a leak that reaches `reset_at` (the container's memory limit) is OOM-killed (the ramp starts
 again from zero and `on_reset` effects fire), and CPU throttling follows CPU with the generator's own
-formula (see injector.py). Logs, Kubernetes events and change records are not produced: the engine
-does not read them.
+formula (see injector.py). Logs, Kubernetes events and change records are not produced here: the
+engine does not read them. In stream version 2 they are added by evidence_live.py, from what the
+effects declared here do (restarts, OOM resets, flaps).
 
 `REHEARSAL` is not a failure scenario. It exists to test the machinery without learning anything
 about how detectable the seven are.
