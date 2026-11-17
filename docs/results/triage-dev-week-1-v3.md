@@ -334,3 +334,70 @@ Minutes from paging to the final answer: median 0.3, max 10.1; for the pages tha
 - Cause (unknown): The scheduling delay is only a small fluctuation. It is 0.29s against an expected 0.20s, a statistically large z-score but a tiny absolute value. The series has hovered around 0.23s for the last 4 hours, and 24 hours earlier the same window averaged 0.26s. No fault is visible.
 - Impact: none
 
+# Arm E: arm D with the guard
+
+**Development set, not a final result.** Appended after arm D. The guard was written after reading D's two dangerous answers, so this shows it does what it was written for, on the cases it was written for.
+
+- written by `scripts/triage_dev_week_v3.py --arm E` at commit `47393eb`; notes on `live-week-1-v2-triage-v3-guard`
+- the agent of arm D (same prompt, schema, tools, budgets, follow-up at paging + 10 min) plus the guard, in code: a note answering needs_human "no" is accepted only if its cause category is not "unknown" AND its impact is ["none"]; otherwise it is converted to "unsure" (recorded with the reason) and followed up. A fresh run: the agent's answers before the guard may differ from D's
+- this invocation: 29 first investigations and 15 follow-ups in 185 s of wall time
+
+| | D first | D final | E first | E final |
+|---|---|---|---|---|
+| real page-outs (25): correct | 13 | 22 | 14 | 23 |
+| real page-outs (25): dangerous | 2 | 2 | 0 | 0 |
+| real page-outs (25): deferred | 10 | 1 | 11 | 2 |
+| noise page-outs (4): correct | 3 | 3 | 0 | 0 |
+| noise page-outs (4): wasted | 0 | 0 | 0 | 1 |
+| noise page-outs (4): deferred | 1 | 1 | 4 | 3 |
+| cause names the injected target (of 25) | 14 | 13 | 16 | 14 |
+| follow-ups | | 11 | | 15 |
+| minutes to the final answer, median / max | | 0.3 / 10.1 | | 10.1 / 10.2 |
+| cost (USD, estimate, follow-ups included) | | 1.31 | | 1.52 |
+
+Notes the guard converted: 6.
+
+| page | truth | record | cause | impact | reason |
+|---|---|---|---|---|---|
+| 20 (nothing injected) | noise | note | unknown | none | "no" needs a known cause and no impact, but the cause category is "unknown" |
+| 25 (nothing injected) | noise | note | unknown | none | "no" needs a known cause and no impact, but the cause category is "unknown" |
+| 35 (nothing injected) | noise | note | unknown | none | "no" needs a known cause and no impact, but the cause category is "unknown" |
+| 36 (nothing injected) | noise | note | unknown | none | "no" needs a known cause and no impact, but the cause category is "unknown" |
+| 35 (nothing injected) | noise | follow_up | unknown | none | "no" needs a known cause and no impact, but the cause category is "unknown" |
+| 36 (nothing injected) | noise | follow_up | unknown | none | "no" needs a known cause and no impact, but the cause category is "unknown" |
+
+Dangerous answers (final): none.
+
+## Per page-out: D and E
+
+| time (UTC) | page | truth | scenario | D first | D final | E first | E follow-up | E final | E outcome |
+|---|---|---|---|---|---|---|---|---|---|
+| Oct 26 03:02 | 1 | real | broker_gc_pressure | yes | yes | yes | - | yes | correct |
+| Oct 26 08:07 | 2 | real | producer_crashloop | no | no | unsure | yes | yes | correct |
+| Oct 26 18:15 | 5 | real | dag_paused | unsure | unsure | unsure | unsure | unsure | deferred |
+| Oct 26 19:15 | 6 | real | dag_paused | unsure | yes | unsure | yes | yes | correct |
+| Oct 26 20:15 | 7 | real | dag_paused | unsure | yes | unsure | yes | yes | correct |
+| Oct 26 21:15 | 8 | real | dag_paused | unsure | yes | unsure | unsure | unsure | deferred |
+| Oct 26 22:15 | 9 | real | dag_paused | unsure | yes | unsure | yes | yes | correct |
+| Oct 26 23:15 | 10 | real | dag_paused | unsure | yes | unsure | yes | yes | correct |
+| Oct 27 00:15 | 11 | real | dag_paused | unsure | yes | yes | - | yes | correct |
+| Oct 27 01:15 | 12 | real | dag_paused | unsure | yes | unsure | yes | yes | correct |
+| Oct 27 02:15 | 13 | real | dag_paused | unsure | yes | unsure | yes | yes | correct |
+| Oct 27 19:14 | 14 | real | trino_heavy_query | yes | yes | yes | - | yes | correct |
+| Oct 28 05:39 | 16 | real | consumer_slow_deploy | yes | yes | yes | - | yes | correct |
+| Oct 28 05:39 | 17 | real | consumer_slow_deploy | yes | yes | yes | - | yes | correct |
+| Oct 28 20:09 | 18 | real | consumer_slow_deploy | yes | yes | yes | - | yes | correct |
+| Oct 28 20:09 | 19 | real | consumer_slow_deploy | yes | yes | yes | - | yes | correct |
+| Oct 28 21:29 | 20 | noise | - | no | no | unsure | yes | yes | wasted |
+| Oct 29 18:23 | 22 | real | broker_gc_pressure | yes | yes | yes | - | yes | correct |
+| Oct 30 11:09 | 23 | real | consumer_memory_leak | yes | yes | yes | - | yes | correct |
+| Oct 30 11:44 | 24 | real | consumer_memory_leak | yes | yes | yes | - | yes | correct |
+| Oct 31 01:10 | 25 | noise | - | no | no | unsure | unsure | unsure | deferred |
+| Oct 31 01:54 | 26 | real | trino_heavy_query | yes | yes | yes | - | yes | correct |
+| Oct 31 01:54 | 27 | real | trino_heavy_query | yes | yes | yes | - | yes | correct |
+| Oct 31 10:20 | 28 | real | producer_crashloop | no | no | unsure | yes | yes | correct |
+| Nov 01 03:40 | 32 | real | dag_paused | unsure | yes | unsure | yes | yes | correct |
+| Nov 01 13:14 | 33 | real | consumer_memory_leak | yes | yes | yes | - | yes | correct |
+| Nov 01 13:14 | 34 | real | consumer_memory_leak | yes | yes | yes | - | yes | correct |
+| Nov 01 18:10 | 35 | noise | - | unsure | unsure | unsure | unsure | unsure | deferred |
+| Nov 01 20:54 | 36 | noise | - | no | no | unsure | unsure | unsure | deferred |
