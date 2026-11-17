@@ -227,3 +227,21 @@ def test_the_mcp_attacker_group_serves_the_same_seven_tools_and_injects_through_
     assert [t.input_schema for t in tools] == [d["input_schema"] for d in A.definitions()]
     assert bad.is_error and "above its limit" in bad.content[0].text
     assert not good.is_error and [c["id"] for c in sent] == ["atk-001"]
+
+
+@pytest.mark.llm
+def test_one_real_wake_stays_inside_the_tools_and_the_budget(ds):
+    import os
+    pytest.importorskip("anthropic")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        pytest.skip("ANTHROPIC_API_KEY is not set")
+    cfg = A.Config.load(runs_dir="")
+    attacker = A.Attacker(ds, cfg, window=(START, END))
+    w = A.Agent(attacker).wake(pd.Timestamp(START, tz="UTC"))
+    assert w["stop"] is None or "budget" in w["stop"]
+    assert all(c["tool"] in {d["name"] for d in A.definitions()} for c in w["tool_calls"])
+    assert len(attacker.commands) <= cfg.budget.max_per_day and w["note"] and w["cost_usd"] > 0
+    for cmd in attacker.commands:                                     # what was sent replays without a refusal
+        assert cmd["intent"] and cmd["severity"] in ("noticeable", "subtle")
+    _, key = A.replay(ds, START, END, attacker.commands)
+    assert not [k for k in key if k["event"] == "rejected"]
