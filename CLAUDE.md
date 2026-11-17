@@ -44,6 +44,8 @@ Every anomaly must carry a score (0-1), a direction, and a plain-language explan
 - Do NOT read test-split labels or tune on the test split until the final evaluation.
 - Tune and iterate on the train split only.
 - Never regenerate or overwrite data/ unless explicitly asked.
+- The triage agent is frozen (tag `triage-freeze-v1`, docs/triage-config-frozen.md). No change to it without a new
+  tag and a log entry saying why; `tests/test_triage_frozen.py` fails on any change.
 
 ## Commands
 ```bash
