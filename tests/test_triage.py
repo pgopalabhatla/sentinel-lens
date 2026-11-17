@@ -306,3 +306,34 @@ def test_the_mcp_server_and_the_investigator_offer_the_same_tools(store, ds, tmp
     assert [t.description for t in tools] == [t["description"] for t in sent]
     direct, _ = ct.call(ctx, "query_metric", {"series_id": world.LAG, "window_minutes": 30})
     assert json.loads(called.content[0].text) == json.loads(ct.dumps(direct)) and not called.is_error
+
+
+# ----------------------------------------------------------------------------- scoring the notes
+def test_triage_score_tables_and_target_naming(ds):
+    from sentinel_lens.correlator import build_topology
+    from sentinel_stream import triage_score
+
+    pages, _ = world.pages_and_alerts()
+    answer_key = [{"event": "started", "id": "inj-1", "scenario": "consumer_slow_deploy", "target": "grp", "params": {"x": 1.0},
+                   "series": [world.LAG], "entities": ["consumer_group:grp"], "start": world.iso(world.at("00:50")),
+                   "stop": world.iso(world.at("01:20"))},
+                  {"event": "published", "start": world.iso(world.DAY), "end": world.iso(world.at("23:59"))}]
+    ids = {p["page"]: p["page_id"] for p in pages if p["kind"] == "paged"}
+
+    def note(page, verdict, ents):
+        return {"type": "note", "page_id": ids[page], "verdict": verdict, "confidence": 0.7, "suspected_cause": "c",
+                "affected_entities": ents, "evidence": [{"tool_call_id": "c1", "finding": "f", "tool": "query_metric"}],
+                "valid": True, "cost_usd_estimate": 0.01, "seconds": 10.0, "tool_calls": 3, "budget_exhausted": None,
+                "tokens": {"total": 100}}
+
+    notes = [note(1, "noise", ["pod:p-a"]), note(2, "real", ["pod:p-a"])]          # page 3 has no note
+    s = triage_score.score(answer_key, pages, notes, build_topology(ds.relationships(), ds.series()))
+    assert [(r["page"], r["truth"], r["verdict"]) for r in s["rows"]] == [(1, "real", "noise"), (2, "noise", "real"), (3, "noise", None)]
+    assert s["table"] == {"real": {"real": 0, "noise": 1, "unsure": 0, "no note": 0},
+                          "noise": {"real": 1, "noise": 0, "unsure": 0, "no note": 1}}
+    assert [r["page"] for r in s["real_called_noise"]] == [1] and [r["page"] for r in s["noise_called_real"]] == [2]
+    assert s["answer_key_entity_named"] == 0 and s["target_named"] == 0                # p-a is 1 hop away, not the target
+    assert "Real called noise: 1 of 1" in triage_score.markdown(s)
+    assert triage_score.names_target(["pod:orders-etl-consumer-0"], "orders-etl-consumer")
+    assert triage_score.names_target(["flink_job:clickstream-enrich"], "clickstream-enrich")
+    assert not triage_score.names_target(["pod:orders-etl-consumer-0"], "orders-etl")
