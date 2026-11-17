@@ -722,3 +722,35 @@ Reading it:
 What it does not show: one week, on a world, a schedule and first-run mistakes all seen before the changes were written; 25 real page-outs, 10 of them from two injections of one scenario. The schedule has no generic injection, so the metrics-only group of the evidence split is empty. The evidence templates are the batch scenarios', written by the author of the detectors and the agent.
 
 Tests, after the last code change: `pytest` 382 passed in 74 s (new: `tests/test_live_evidence.py`, v2 tests in `test_stream_consumer.py` and `test_context_tools.py`); `pytest -m kafka` 10 passed (9 in 3 min 55 s, then the broker isolation test parametrized over both stream versions, 3 passed in 9 s); `pytest -m llm` 1 passed in 10 s. `pytest -m slow` not run: nothing it covers changed.
+
+## Nov 17, triage v3: needs_human instead of a verdict, one follow-up (development set)
+
+Branch `triage-v3`, off main (main fast-forwarded to `triage-v2` first). All changes are general: no rule names a scenario, DAG or entity. Still the development set: arms A-C and their mistakes were read before this was written.
+
+**Note schema v3.** `needs_human` (yes | no | unsure) replaces `verdict`, with `cause` {category: change | capacity | failure | external | unknown, description} and `impact` {degraded: some of sla, lag, errors, latency, or ["none"]; description; evidence: the call ids that show it}. Validated like the rest of the note (categories, "none" alone, cited calls must have been made, impact other than none must cite something). The prompt's rule: an explanation, including a planned change, does not make a page harmless; "no" only when there is no ongoing impact AND the cause is expected and bounded (e.g. a burst that is subsiding, maintenance inside its window); conflicting or missing evidence means unsure. The traffic rule stays.
+
+**Follow-up.** A note that says "unsure" gets one re-investigation at paging time + `follow_up_minutes` (10, `triage.yaml`): a fresh agent on `Context.at_page(..., at=paged + 10 min)`, whose tools see everything up to that time and nothing after; a page merged in the meantime is followed into the page that holds it (get_page says `paged_as_page`). It is told when the page went out, what time it is now and what the first note said. The dispatcher writes it as a `follow_up` record linked by page id; a follow-up never gets one. Live, it starts once telemetry has passed the time by `follow_up_grace` (1 min, so the consumer has written that minute's pages); on finished topics, if the time is inside the stream. Restarts: `triage` is the memory (an unsure note without a follow-up is followed up after a restart; nothing is written twice).
+
+**Scoring** (`triage_score.score_needs_human`): a true page answered yes = correct, no = dangerous, unsure = deferred; a false page no = correct, yes = wasted, unsure = deferred; for the first answer and the final one (the follow-up's, if any); minutes from paging to the final answer; whether the cause text names the injected target (the name or a pod `<target>-<n>`, as a whole word). Arm C's verdicts are scored by mapping real -> yes, noise -> no, unsure -> unsure. The old verdict scoring stays for the v1/v2 reports.
+
+**Result** ([docs/results/triage-dev-week-1-v3.md](results/triage-dev-week-1-v3.md)), arm D on the same 29 page-outs of stream v2 as arm C:
+
+| | C | D first answer | D final answer |
+|---|---|---|---|
+| true pages (25): correct / dangerous / deferred | 12 / 10 / 3 | 13 / 2 / 10 | 22 / 2 / 1 |
+| false pages (4): correct / wasted / deferred | 1 / 0 / 3 | 3 / 0 / 1 | 3 / 0 / 1 |
+| cause names the injected target (of 25) | 10 | 14 | 13 |
+| minutes to the final answer, median / max | 0.2 / 0.4 | | 0.3 / 10.1 |
+| cost (USD) | 0.97 | | 1.31 (11 follow-ups) |
+
+Reading it:
+
+- **The paused DAGs are no longer dangerous.** At paging time all ten are "unsure" (the pause record explains them, the rule says that is not enough); ten minutes later nine follow-ups say yes (impact: SLA, runs missing), one stays unsure. Those nine cost ten minutes each to the final answer.
+- **Two new dangerous answers: both crash-loop pages,** answered "no" at confidence 0.6 with cause **unknown** and impact none. That breaks the rule as written ("no" needs an expected and bounded cause). At their paging minute there was indeed no impact yet (orders traffic on baseline, z = -0.6); the crash's records and the traffic drop start a minute later. Arm C called both unsure. A general, mechanical guard would be to reject a "no" whose cause category is "unknown" in `validate_note`; not done, since it was found here, and it has to be judged on another world.
+- The three false pages that are not "deferred" in D are "no", none wasted; one false page (Nov 01 18:10) stays unsure after its follow-up.
+- Follow-ups changed the answer in 9 of 11 cases, all unsure -> yes.
+- The cause category is not scored; for the Trino heavy query the agent says unknown or failure where the design would expect external (a user's query).
+
+What it does not show: as before, one week, 25 true page-outs of which 10 come from the two paused DAGs; and every change here was written after reading arm C's mistakes.
+
+Tests, after the last code change: `pytest` 417 passed in 75 s (new: `tests/test_triage_follow_up.py`, 22 tests: the follow-up context's cut at paging + 10 for every tool, a merged page followed, the dispatcher's follow-ups, restarts, waiting for the stream, the outcome scoring and target naming; the schema's validation in `test_triage.py`); `pytest -m kafka` 10 passed in 3 min 49 s; `pytest -m llm` 1 passed in 11 s.
