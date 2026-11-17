@@ -203,3 +203,41 @@ def test_old_verdict_notes_map_onto_needs_human():
     ("nothing named", "trino-lakehouse", False), ("", "x", False)])
 def test_text_names_target(text, target, named):
     assert triage_score.text_names_target(text, target) is named
+
+
+# ------------------------------------------------------------------------------------------ the guard
+def _no(category="capacity", degraded=("none",)):
+    return {"page_id": "P", "needs_human": "no", "confidence": 0.7, "cause": {"category": category, "description": "d"},
+            "impact": {"degraded": list(degraded), "description": "d", "evidence": []}}
+
+
+@pytest.mark.parametrize("note, converted, fragment", [
+    (_no(), False, None), (_no("change"), False, None),
+    (_no("unknown"), True, '"unknown"'), (_no(degraded=("lag",)), True, "['lag']"),
+    (_no("unknown", ("errors", "latency")), True, "unknown"),
+    ({**_no("unknown"), "needs_human": "yes"}, False, None), ({**_no("unknown"), "needs_human": "unsure"}, False, None)])
+def test_the_guard_accepts_no_only_with_a_known_cause_and_no_impact(note, converted, fragment):
+    from sentinel_stream.investigator import guard
+    out, why = guard(note)
+    assert (why is not None) is converted
+    if converted:
+        assert out["needs_human"] == "unsure" and fragment in why and note["needs_human"] == "no"     # the input is not changed
+    else:
+        assert out == note
+
+
+def test_a_guarded_no_is_recorded_as_converted_and_gets_the_follow_up(ds, tmp_path):
+    pages, alerts = world.pages_and_alerts()
+    io = MemoryTopics(telemetry=world.telemetry(), alerts=alerts, pages=pages[:2])           # one page-out, 01:00
+    no_unknown = note_json(pages[1]["page_id"], answer="no", evidence=("c1",), entities=(),
+                           cause={"category": "unknown", "description": "a restart, cause not found"},
+                           impact={"degraded": ["none"], "description": "nothing degraded", "evidence": ["c1"]})
+    llm = FakeLLM([[tool_use("get_page")], [text(no_unknown)],                             # at 01:00: "no", unknown cause
+                   [tool_use("get_page")], [text(note_json(pages[1]["page_id"]))]])      # at 01:10: yes
+    agent = investigator(llm, tmp_path)
+    Dispatcher(io, ds, agent.investigate, concurrency=1, follow_up_minutes=10, log=lambda line: None).run(until_end=True)
+    first, = records(io, "note")
+    later, = records(io, "follow_up")
+    assert first["valid"] and first["needs_human"] == "unsure" and first["cause"]["category"] == "unknown"
+    assert first["guard"]["converted_from"] == "no" and '"unknown"' in first["guard"]["reason"]
+    assert later["needs_human"] == "yes" and later["guard"] is None and later["as_of"] == world.iso(world.at("01:10"))

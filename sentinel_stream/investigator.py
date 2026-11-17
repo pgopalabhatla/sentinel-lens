@@ -27,6 +27,11 @@ result labelled with its call id, c1, c2, ...). An invalid note is sent back onc
 tools off; if the second answer is invalid too, or a budget ends the run with no valid note, the note
 says needs_human `unsure` with confidence 0 and `valid: false`.
 
+Guard (code, not prompt): a valid note that answers needs_human "no" is accepted as "no" only if its
+cause category is not "unknown" AND its impact is ["none"]. Otherwise it is converted to "unsure" and
+the note says so (`guard`: {"converted_from": "no", "reason": ...}); an "unsure" note gets the normal
+follow-up. The prompt is not told about the guard.
+
 Follow-up. `investigate(ctx, previous=note)` is a fresh agent on a Context cut at a LATER time (the
 dispatcher uses paging time + `follow_up_minutes` when the first note said "unsure"). It is told what
 the first note said and when the page went out; its tools see nothing after the later time.
@@ -238,6 +243,22 @@ def validate_note(note: dict, page_id: str, call_ids: set, entities) -> list:
     return errors
 
 
+def guard(note: dict) -> tuple:
+    """(the note as accepted, None) or (the note converted to "unsure", why). A "no" stands only with a
+    known cause and no impact: "no ongoing impact AND an expected, bounded cause" checked mechanically,
+    as far as the note's own fields allow."""
+    if note.get("needs_human") != "no":
+        return note, None
+    reasons = []
+    if (note.get("cause") or {}).get("category") == "unknown":
+        reasons.append('the cause category is "unknown"')
+    if (note.get("impact") or {}).get("degraded") != ["none"]:
+        reasons.append(f"the impact is {(note.get('impact') or {}).get('degraded')}, not [\"none\"]")
+    if not reasons:
+        return note, None
+    return {**note, "needs_human": "unsure"}, '"no" needs a known cause and no impact, but ' + " and ".join(reasons)
+
+
 def request_text(ctx: Context, previous: dict | None = None) -> str:
     """The first user turn. A follow-up is told when the page went out, what time it is now and what the
     first note said."""
@@ -447,9 +468,11 @@ class Investigator:
                     "impact": {"degraded": [], "description": "(not determined)", "evidence": []},
                     "affected_entities": [], "evidence": [], "next_step": "Investigate the page by hand."}
         note = {k: note[k] for k in NOTE_FIELDS}
+        note, why = guard(note) if valid else (note, None)
         note["evidence"] = [{**e, "tool": calls.get(e["tool_call_id"])} for e in note["evidence"]]
         out = {**note, "page": ctx.original_page or ctx.page, "paged_at": ctx.paged_at.isoformat(), "as_of": ctx.now.isoformat(),
                "follow_up": previous is not None, "advisory": True, "valid": valid,
+               "guard": None if why is None else {"converted_from": "no", "reason": why},
                "model": self.config.model, "models_served": state["models"], "tool_calls": len(state["calls"]),
                "tools_used": [c["tool"] for c in state["calls"]], "api_requests": len(state["api"]),
                "tokens": {**state["tokens"], "total": sum(state["tokens"].values())},
