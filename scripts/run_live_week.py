@@ -109,9 +109,11 @@ def schedule_markdown(commands: list) -> str:
 
 
 # ----------------------------------------------------------------------------------------- run
-def run(data, start, end, commands: list, prefix: str, scenarios: dict = SCENARIOS, history_start=None, log=print) -> dict:
+def run(data, start, end, commands: list, prefix: str, scenarios: dict = SCENARIOS, history_start=None, log=print,
+        stream_version: int = 1) -> dict:
     """Play `data` from start to end through Kafka at max speed with `commands` on the control topic,
-    run the consumer on it, score. Uses its own topics, all named `prefix` + ..., which must not exist."""
+    run the consumer on it, score. Uses its own topics, all named `prefix` + ..., which must not exist.
+    stream_version 2: the stream also carries logs, events and changes (scripts/triage_dev_week_v2.py)."""
     from confluent_kafka.admin import AdminClient
 
     from sentinel_lens.correlator import build_topology
@@ -141,7 +143,8 @@ def run(data, start, end, commands: list, prefix: str, scenarios: dict = SCENARI
                                     env={**os.environ, "PYTHONPATH": str(ROOT)}, stdout=out, stderr=out)
         try:
             sent = publish(ds, start, end, speed=None, bootstrap=bootstrap, topic=topic["telemetry"], history_start=history_start,
-                           control=topic["control"], answer_key=topic["answer_key"], scenarios=scenarios)
+                           control=topic["control"], answer_key=topic["answer_key"], scenarios=scenarios,
+                           stream_version=stream_version)
             log(f"published {sent} telemetry messages; waiting for the consumer")
             code = consumer.wait(timeout=1800)
         finally:
