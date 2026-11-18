@@ -52,7 +52,9 @@ def main(argv=None) -> int:
          f"({len(wakes)} wakes); per wake at most {b['max_tool_calls_per_wake']} tool calls",
          f"- budget enforced in code: at most {b['max_per_day']} injections a day, at most {b['max_active']} active at once"
          + (f", starts at least {b['min_gap_minutes'] / 60:g} h apart, only series described (describe_normal) in the same wake"
-            if "min_gap_minutes" in b else "") + f"; asked for at least {b['min_per_day']} a day",
+            if "min_gap_minutes" in b else "")
+         + (f", named scenarios at most {b['max_named_share']:.0%} of the campaign's injections" if "max_named_share" in b else "")
+         + f"; asked for at least {b['min_per_day']} a day",
          f"- cost: **USD {record['cost_usd']:.3f}** (estimate), tokens {record['tokens']}",
          f"- tool calls: {sum(calls.values())} ({', '.join(f'{k} {v}' for k, v in calls.most_common())})",
          f"- recorded control stream: [attacker-{name}.control.jsonl](attacker-{name}.control.jsonl) ({len(record['commands'])} "
@@ -63,6 +65,9 @@ def main(argv=None) -> int:
          *(f"| {k} | {v} |" for k, v in Counter(i["kind"] for i in inj).most_common()),
          *(f"| {k} | {v} |" for k, v in Counter(i["severity"] for i in inj).most_common()),
          *(f"| touches layer {l} | {sum(l in i['layers'] for i in inj)} |" for l in (1, 2, 3)), "",
+         *([f"Named share over the campaign, after each injection: "
+            + ", ".join(f"{sum(j['kind'] == 'scenario' for j in inj[:n])}/{n}" for n in range(1, len(inj) + 1))
+            + f" (cap {b['max_named_share']:.0%}).", ""] if "max_named_share" in b and inj else []),
          "| id | start (UTC) | stop | kind | what | entities | severity | intent |", "|---|---|---|---|---|---|---|---|"]
     for i in inj:
         if i["kind"] == "scenario":
@@ -88,8 +93,12 @@ def main(argv=None) -> int:
         for i in generic:
             o = i["overlap"]
             L.append(f"| {i['id']} | " + " | ".join(f"{o[n]['shared']}/{o[n]['of_incident']} ({o[n]['jaccard']:g})" for n in names) + " |")
-    L += ["", "## Rejections (the attacker's own check: the injector's rules, the budget, described series, the gap)", ""]
+    L += ["", "## Rejections (the attacker's own check: the injector's rules, the budget, described series, the gap"
+          + (", the named-scenario quota" if "max_named_share" in b else "") + ")", ""]
     if record["rejections"]:
+        rule = Counter(r["reasons"][0].split(":")[0] if r["reasons"][0].split(":")[0] in ("budget", "quota") else
+                       "partly accepted" if r.get("partly_accepted") else "other" for r in record["rejections"])
+        L += [f"{len(record['rejections'])} in all: " + ", ".join(f"{k} {v}" for k, v in rule.most_common()) + ".", ""]
         L += ["| decided at | tool | partly accepted | reasons |", "|---|---|---|---|"]
         L += [f"| {r['at'][5:16]} | {r['tool']} | {'yes' if r.get('partly_accepted') else 'no'} | {cell('; '.join(r['reasons']))} |"
               for r in record["rejections"]]

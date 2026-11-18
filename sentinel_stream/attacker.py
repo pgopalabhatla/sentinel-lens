@@ -19,9 +19,12 @@ It is Claude with seven tools (`TOOLS`, also served over MCP: `python -m sentine
 Rules in code, besides the budget: an injection may only touch series that `describe_normal` was
 called on during the same wake (so its effects are sized against what is normal; a named scenario
 needs all of its series described, `list_scenarios` lists them), and injection starts must be at
-least `min_gap_minutes` (3 h) apart. A generic incident must say, in `novelty`, which plausible real
-failure it stands for that the named scenarios do not cover; how much its series overlap with each
-named scenario's is recorded and reported, not enforced.
+least `min_gap_minutes` (3 h) apart. Named scenarios may make up at most `max_named_share` (60%) of
+the campaign's injections, at every point of it: a named scenario that would push the share above is
+refused with a request for a generic incident instead (so a campaign's first injection is generic).
+A generic incident must say, in `novelty`, which plausible real failure it stands for that the named
+scenarios do not cover; how much its series overlap with each named scenario's is recorded and
+reported, not enforced.
 
 Every injection goes the validated way: the command is checked with the injector's own rules (the
 same `Injector` code, unchanged) before it is sent, including the physical-limit check against the
@@ -77,7 +80,7 @@ You are woken at regular times. Each time, decide whether to inject something no
 
 Before injecting, call describe_normal on every series the injection will touch, in the same wake (it takes up to 30 series at once; list_scenarios lists the series each named scenario touches), and size the effects against what is normal for them. An injection that touches a series not described in this wake is rejected. Injection starts must be at least {gap} apart.
 
-Vary the incidents across the campaign: named scenarios and new generic incidents; different targets and parts of the platform; layer 1 (pods: CPU, memory, restarts), layer 2 (service signals: throughput, backlog, latency, errors, JVM) and layer 3 (product-specific signals); noticeable and subtle ones. Give every injection an intent (one or two sentences: the real-world failure it stands for) and a severity: noticeable or subtle.
+Vary the incidents across the campaign: named scenarios and new generic incidents (named scenarios may make up at most {named_share} of the campaign's injections; a named scenario that would go above that is rejected); different targets and parts of the platform; layer 1 (pods: CPU, memory, restarts), layer 2 (service signals: throughput, backlog, latency, errors, JVM) and layer 3 (product-specific signals); noticeable and subtle ones. Give every injection an intent (one or two sentences: the real-world failure it stands for) and a severity: noticeable or subtle.
 Use list_platform to find series and entities. Effects must be physically possible (ratios stay in 0-1, memory and CPU under the pod's limit, counters only go up by whole numbers); the injector checks this and rejects what is not, and the tool tells you why. Respect the budget given at each wake.
 
 When you are done for this wake, reply with a short plain-text note: what you did and why, or why you did nothing."""
@@ -90,6 +93,7 @@ class Budget:
     max_per_day: int = 3                # enforced: a further injection that simulated day is refused
     max_active: int = 2                 # enforced: an injection that would make 3 active at any time is refused
     min_gap_minutes: float = 180.0      # enforced: injection starts at least this far apart
+    max_named_share: float = 0.6        # enforced: named scenarios at most this share of the campaign's injections
     max_tool_calls_per_wake: int = 8
     max_seconds_per_wake: float = 90.0
     max_tokens_per_wake: int = 80_000
@@ -181,6 +185,20 @@ class Attacker:
                     f"active during {_iso(at)} .. {_iso(stop)}; stop one or start later")
         return None
 
+    def named_counts(self) -> tuple:
+        """(named scenarios, all injections) accepted so far in this campaign."""
+        return sum(i["kind"] == "scenario" for i in self.injections.values()), len(self.injections)
+
+    def check_named_share(self) -> str | None:
+        """Variety, enforced: a named scenario may not push the named share of the campaign above max_named_share."""
+        share = self.config.budget.max_named_share
+        named, total = self.named_counts()
+        if (named + 1) / (total + 1) <= share + 1e-9:
+            return None
+        return (f"quota: named scenarios may make up at most {share:.0%} of the campaign's injections; {named} of the {total} "
+                f"so far are named, so this one would make {named + 1} of {total + 1}. Inject a generic incident "
+                f"(inject_effects) instead")
+
     # ---------------------------------------------------------------------------- validation
     def _quiet_reading(self, t) -> dict:
         """The quiet world's readings of the minute stamped t (what the publisher would meet, if nothing else
@@ -243,6 +261,9 @@ class Attacker:
         spec = SCENARIOS.get(scenario)
         if spec is None:
             return self._reject("inject_scenario", args, [f"unknown scenario {scenario!r}; there are {sorted(SCENARIOS)}"])
+        why = self.check_named_share()
+        if why:
+            return self._reject("inject_scenario", args, [why])
         bad = self._intent(intent, severity)
         target = target or spec.targets[0]
         try:
@@ -412,8 +433,11 @@ class Attacker:
                     "start": _iso(i["at"]), "stop": _iso(i["stopped_at"] or i["stop"]), "severity": i["severity"],
                     "intent": i["intent"]}
         b = self.config.budget
+        named, total = self.named_counts()
         return {"now": _iso(self.now), "active_now": len(self.active_at(self.now)), "max_active": b.max_active,
                 "started_today": len(self.today(self.now)), "max_per_day": b.max_per_day,
+                "named_so_far": named, "injections_so_far": total, "max_named_share": b.max_named_share,
+                "next_may_be_named": self.check_named_share() is None,
                 "injections": [row(i) for i in self.injections.values()]}
 
 
@@ -487,7 +511,8 @@ def dumps(x) -> str:
 
 # --------------------------------------------------------------------------------------- the agent
 def system_prompt(config: Config) -> str:
-    return SYSTEM.replace("{gap}", f"{config.budget.min_gap_minutes / 60:g} hours")
+    return (SYSTEM.replace("{gap}", f"{config.budget.min_gap_minutes / 60:g} hours")
+            .replace("{named_share}", f"{config.budget.max_named_share:.0%}"))
 
 
 def anthropic_create():
@@ -532,7 +557,8 @@ class Agent:
         lines = [f"It is now {now:%Y-%m-%d %H:%M} UTC (simulated). You are woken every {self.config.wake_every_minutes:g} minutes.",
                  f"Budget: at most {b.max_per_day} injections starting per day (aim for {b.min_per_day} to {b.max_per_day}), at most "
                  f"{b.max_active} active at once, starts at least {b.min_gap_minutes / 60:g} h apart. Today so far: {today}. "
-                 f"Active now: {len(a.active_at(now))}.",
+                 f"Active now: {len(a.active_at(now))}. Named scenarios at most {b.max_named_share:.0%} of the campaign's "
+                 f"injections: the next one may {'' if a.check_named_share() is None else 'NOT '}be a named scenario.",
                  f"So far in the campaign: {len(mine)} injections; named {kinds['scenario']}, generic {kinds['generic']}; "
                  f"noticeable {sev['noticeable']}, subtle {sev['subtle']}; touching layers {layers}.",
                  *(f"- {i['id']}: {i['kind']} {i['scenario'] or ''} {', '.join(i['entities'][:4])} from {i['at']:%m-%d %H:%M} to "

@@ -43,7 +43,8 @@ COUNTER_MULT = {"series_id": "kube_pod_container_status_restarts_total|kafka-0",
 
 
 NOVELTY = "a failure none of the named scenarios covers, for the test"
-NO_GAP = A.Budget(min_gap_minutes=0)
+NO_QUOTA = A.Budget(max_named_share=1.0)                    # tests about another rule start with a named scenario
+NO_GAP = A.Budget(min_gap_minutes=0, max_named_share=1.0)
 
 
 def describe(*series, id_="d"):
@@ -90,7 +91,7 @@ def test_injection_starts_must_be_three_hours_apart(ds):
               [tool_use("inject_scenario", scenario(start_in=179, duration_min=25), "b")],      # 2 h 59 min later: refused
               [tool_use("inject_scenario", scenario(start_in=180, duration_min=25), "c")],      # 3 h later: accepted
               [text("spaced")]]
-    attacker, record = campaign(ds, script, every=720)
+    attacker, record = campaign(ds, script, every=720, budget=NO_QUOTA)
     assert [c["at"][11:16] for c in record["commands"]] == ["00:00", "03:00"]
     assert "at least 3 h apart" in record["rejections"][0]["reasons"][0] and "atk-001" in record["rejections"][0]["reasons"][0]
     assert attacker.config.budget.min_gap_minutes == 180
@@ -136,8 +137,42 @@ def test_a_generic_incident_needs_novelty_and_its_overlap_with_the_scenarios_is_
         "novelty" in next(d for d in A.definitions() if d["name"] == "inject_effects")["input_schema"]["required"]
 
 
+def test_named_scenarios_may_make_up_at_most_60_percent_of_the_campaign(ds):
+    # named first: 1 of 1 is refused; a generic, then a named one (1 of 2) passes; a second named (2 of 3) is refused
+    script = [[describe(*touched(ds), GOOD["series_id"])],
+              [tool_use("inject_scenario", scenario(duration_min=25), "a")],
+              [tool_use("inject_effects", effects(GOOD), "b")],
+              [tool_use("inject_scenario", scenario(start_in=60, duration_min=25), "c")],
+              [tool_use("list_active", {}, "d")],
+              [tool_use("inject_scenario", scenario(start_in=120, duration_min=25), "e")],
+              [text("one of each")]]
+    attacker, record = campaign(ds, script, every=720, budget=A.Budget(min_gap_minutes=0))
+    assert attacker.config.budget.max_named_share == 0.6
+    assert [c.get("scenario", "generic") for c in record["commands"]] == ["generic", "trino_heavy_query"]
+    first, second = (r["reasons"][0] for r in record["rejections"])
+    assert "at most 60%" in first and "0 of the 0 so far" in first and "Inject a generic incident (inject_effects)" in first
+    assert "1 of the 2 so far" in second and "would make 2 of 3" in second
+    active = record["wakes"][0]["tool_calls"][4]["result"]
+    assert (active["named_so_far"], active["injections_so_far"], active["next_may_be_named"]) == (1, 2, False)
+    assert "the next one may NOT be a named scenario" in record["wakes"][0]["messages"][0]["content"]   # 0 so far
+
+
+def test_the_named_share_is_a_running_cap_with_60_percent_itself_allowed(ds):
+    attacker = A.Attacker(ds, config())
+    attacker.now = pd.Timestamp(START, tz="UTC")
+    wake = A.Agent(attacker).wake_text(attacker.now, False)
+    assert "the next one may NOT be a named scenario" in wake                  # 1 of 1 would be 100%
+    for kinds, allowed in ((["generic"], True), (["generic", "scenario"], False), (["generic", "scenario", "generic"], True),
+                           (["generic", "scenario", "generic", "scenario"], True),                  # 3 of 5 = 60%: allowed
+                           (["generic", "scenario", "generic", "scenario", "scenario"], False)):    # 4 of 6: refused
+        attacker.injections = {f"x{n}": {"kind": k} for n, k in enumerate(kinds)}
+        assert (attacker.check_named_share() is None) is allowed, kinds
+    prompt = A.system_prompt(attacker.config)
+    assert "at most 60% of the campaign's injections" in prompt and "{named_share}" not in prompt
+
+
 def test_an_injection_outside_the_window_or_in_the_past_is_refused(ds):
-    attacker = A.Attacker(ds, config(), window=(START, END))
+    attacker = A.Attacker(ds, config(budget=NO_QUOTA), window=(START, END))
     attacker.now = pd.Timestamp(END, tz="UTC") - pd.Timedelta("30min")
     attacker.described = set(touched(ds))
     out = attacker.inject_scenario(**scenario(start_in=60))
@@ -167,7 +202,7 @@ def test_stop_ends_only_its_own_running_injection(ds):
     script = [[describe(*touched(ds))], [tool_use("inject_scenario", scenario(duration_min=50), "a")], [text("one")],
               [tool_use("stop", {"injection_id": "atk-001"}, "b")], [tool_use("stop", {"injection_id": "atk-001"}, "c")],
               [tool_use("stop", {"injection_id": "nope"}, "d")], [text("stopped")]]
-    attacker, record = campaign(ds, script, end="2026-10-07 01:00", every=30)
+    attacker, record = campaign(ds, script, end="2026-10-07 01:00", every=30, budget=NO_QUOTA)
     assert [c["cmd"] for c in record["commands"]] == ["inject", "stop"]
     assert record["commands"][1] == {"cmd": "stop", "id": "atk-001", "at": "2026-10-07T00:30:00+00:00"}
     second = record["wakes"][1]["tool_calls"]
@@ -286,7 +321,7 @@ def test_the_mcp_attacker_group_serves_the_same_seven_tools_and_injects_through_
     from mcp import Client
 
     sent = []
-    attacker = A.Attacker(ds, config(), send=sent.append)
+    attacker = A.Attacker(ds, config(budget=NO_QUOTA), send=sent.append)
     attacker.now = pd.Timestamp(START, tz="UTC")
 
     async def session():
