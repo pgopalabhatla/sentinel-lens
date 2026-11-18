@@ -50,8 +50,9 @@ def main(argv=None) -> int:
          f"- window: {start} .. {end} of `data_live` (the quiet world), campaign mode (the live loop at max speed, no broker)",
          f"- agent: `{cfg['model']}`, effort `{cfg['effort']}`, woken every {cfg['wake_every_minutes']:g} simulated minutes "
          f"({len(wakes)} wakes); per wake at most {b['max_tool_calls_per_wake']} tool calls",
-         f"- budget enforced in code: at most {b['max_per_day']} injections a day, at most {b['max_active']} active at once; "
-         f"asked for at least {b['min_per_day']} a day",
+         f"- budget enforced in code: at most {b['max_per_day']} injections a day, at most {b['max_active']} active at once"
+         + (f", starts at least {b['min_gap_minutes'] / 60:g} h apart, only series described (describe_normal) in the same wake"
+            if "min_gap_minutes" in b else "") + f"; asked for at least {b['min_per_day']} a day",
          f"- cost: **USD {record['cost_usd']:.3f}** (estimate), tokens {record['tokens']}",
          f"- tool calls: {sum(calls.values())} ({', '.join(f'{k} {v}' for k, v in calls.most_common())})",
          f"- recorded control stream: [attacker-{name}.control.jsonl](attacker-{name}.control.jsonl) ({len(record['commands'])} "
@@ -72,7 +73,22 @@ def main(argv=None) -> int:
         stop = i["stopped_at"] or i["stop"]
         L.append(f"| {i['id']} | {i['at'][5:16]} | {stop[5:16]}{' (stopped)' if i['stopped_at'] else ''} | {i['kind']} | {cell(what)} | "
                  f"{cell(', '.join(i['entities']))} | {i['severity']} | {cell(i['intent'])} |")
-    L += ["", "## Rejections (the attacker's own check: the injector's rules, the budget)", ""]
+    generic = [i for i in inj if i["kind"] == "generic"]
+    if not generic and "min_gap_minutes" in b:
+        L += ["", "## Generic incidents: novelty, and overlap with the named scenarios", "",
+              "No generic incident in this run, so there is no novelty text or overlap to report."]
+    if generic and "overlap" in generic[0]:
+        names = list(generic[0]["overlap"])
+        L += ["", "## Generic incidents: novelty, and overlap with the named scenarios (reported, not enforced)", "",
+              "Overlap: the incident's series shared with each scenario's series (over all its targets), as "
+              "`shared / the incident's series (Jaccard)`.", ""]
+        for i in generic:
+            L += [f"- **{i['id']}** novelty: {cell(i['novelty'])}"]
+        L += ["", "| incident | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
+        for i in generic:
+            o = i["overlap"]
+            L.append(f"| {i['id']} | " + " | ".join(f"{o[n]['shared']}/{o[n]['of_incident']} ({o[n]['jaccard']:g})" for n in names) + " |")
+    L += ["", "## Rejections (the attacker's own check: the injector's rules, the budget, described series, the gap)", ""]
     if record["rejections"]:
         L += ["| decided at | tool | partly accepted | reasons |", "|---|---|---|---|"]
         L += [f"| {r['at'][5:16]} | {r['tool']} | {'yes' if r.get('partly_accepted') else 'no'} | {cell('; '.join(r['reasons']))} |"
