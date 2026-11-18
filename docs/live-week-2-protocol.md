@@ -132,7 +132,9 @@ means something):
 - Cause names the target, over true pages. For a named scenario, `triage_score.text_names_target` with
   its target (the name, or a pod `<target>-<n>`, as a whole word). A generic injection has no single
   target, so for it the cause names the target if it names any entity the answer key lists for the
-  injection, under the same whole-word rule. Reported split by kind.
+  injection, under the same whole-word rule. This is more lenient than the named rule; that is fair
+  because a generic incident really has several targets. The report says so next to the numbers,
+  which are split by kind.
 - Minutes from paging to the final answer: median and maximum.
 - Follow-ups, and notes the guard converted.
 - Cost (USD, estimate from the configured prices, follow-ups included).
@@ -174,7 +176,9 @@ Next to it: `docs/results/live-week-2.control.jsonl` (the recorded campaign). Tr
 `runs/` (gitignored).
 
 **Post-hoc analysis** goes in a separate file, `docs/results/live-week-2-posthoc.md`, labelled as written
-after the result was seen. The result file is not edited to add it.
+after the result was seen. The result file is not edited to add it. Planned for it already: the
+injections that started too close to the end of the stream to have had a realistic chance of being
+caught (for example in its last hour), named one by one. They stay in the result's counts.
 
 ## Rules
 

@@ -372,7 +372,9 @@ def triage_section(scored: list, raw: list, runs: list, inj_by_id: dict) -> list
               for s in scored) + " | | |"]
     for kind in ("named", "generic"):
         vals = [by_kind(s, kind) for s in scored]
-        L.append(f"| cause names the target, {kind} (of {vals[0][1]} true pages) | " + " | ".join(str(v[0]) for v in vals) +
+        label = ("cause names the target, named" if kind == "named" else
+                 "cause names any entity of the injection, generic (lenient: a generic incident has several targets)")
+        L.append(f"| {label} (of {vals[0][1]} true pages) | " + " | ".join(str(v[0]) for v in vals) +
                  f" | {min(v[0] for v in vals)}-{max(v[0] for v in vals)} | |")
     L += [line("follow-ups", [s["follow_ups"] for s in scored]),
           line("notes the guard converted", [sum(1 for r in rw if r.get("type") in ("note", "follow_up") and r.get("guard")) for rw in raw]),
