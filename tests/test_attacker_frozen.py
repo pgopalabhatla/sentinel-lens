@@ -1,4 +1,4 @@
-"""The attacker agent is frozen (tag `attacker-freeze-v1`): the committed docs/attacker-config-frozen.md must be
+"""The attacker agent is frozen (tag `attacker-freeze-v2`; v1 is history): the committed docs/attacker-config-frozen.md must be
 exactly what scripts/attacker_freeze.py generates from the code now. If this fails, the attacker changed:
 either undo the change, or regenerate the file under a new tag with a log entry saying why."""
 import sys
@@ -22,4 +22,6 @@ def test_the_frozen_file_holds_the_prompt_the_budget_and_every_tool():
     prompt = A.system_prompt(A.Config.load())
     assert prompt in text and attacker_freeze.sha256(prompt) in text and "{gap}" not in prompt
     assert all(f"`{d['name']}`" in text for d in A.definitions())
-    assert "| minimum gap between injection starts | 180 min | in code |" in text and "attacker-freeze-v1" in text
+    assert "| minimum gap between injection starts | 180 min | in code |" in text and "attacker-freeze-v2" in text
+    assert "| named scenarios, share of the campaign's injections at every point, at most | 60% | in code |" in text
+    assert "{named_share}" not in prompt and "at most 60% of the campaign's injections" in prompt

@@ -46,7 +46,7 @@ Every anomaly must carry a score (0-1), a direction, and a plain-language explan
 - Never regenerate or overwrite data/ unless explicitly asked.
 - The triage agent is frozen (tag `triage-freeze-v1`, docs/triage-config-frozen.md). No change to it without a new
   tag and a log entry saying why; `tests/test_triage_frozen.py` fails on any change.
-- The attacker agent is frozen (tag `attacker-freeze-v1`, docs/attacker-config-frozen.md), with the same rule;
+- The attacker agent is frozen (tag `attacker-freeze-v2`, docs/attacker-config-frozen.md; v1 is history), with the same rule;
   `tests/test_attacker_frozen.py` fails on any change (also to the injector, whose rules are its validation).
 
 ## Commands
