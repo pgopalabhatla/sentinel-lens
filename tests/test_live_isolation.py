@@ -335,7 +335,8 @@ def test_through_the_broker_the_attacker_writes_to_control_only_and_reads_nothin
         monkeypatch.setattr(confluent_kafka, "Consumer", SpyConsumer)
         monkeypatch.setattr(confluent_kafka, "Producer", SpyProducer)
         monkeypatch.setattr(broker, "Consumer", SpyConsumer)
-        cfg = A.Config(model="fake", effort=None, wake_every_minutes=60)
+        cfg = A.Config(model="fake", effort=None, wake_every_minutes=60,
+                       budget=A.Budget(max_named_share=1.0))                   # the quota is tested in test_attacker.py
         att = A.Attacker(DataSource(ROOT / "data"), cfg, send=lambda cmd: injector.send(bootstrap, topic["control"], [cmd]))
         llm = FakeLLM([[tool_use("describe_normal", {"series_ids": att.scenario_series("trino_heavy_query", "trino-lakehouse")}, "d")],
                        [tool_use("inject_scenario", {"scenario": "trino_heavy_query", "intent": "a heavy query",
