@@ -151,7 +151,7 @@ which ones.
 ## Predictions
 
 To be filled in by the author, and committed, BEFORE the run. The runner refuses while any field below
-still reads NOT FILLED IN. A prediction is a single number (or a share) and a sentence of reasoning.
+still holds the placeholder. A prediction is a single number (or a share) and a sentence of reasoning.
 
 | | prediction | reasoning |
 |---|---|---|
