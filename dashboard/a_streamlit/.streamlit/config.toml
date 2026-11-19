@@ -1,0 +1,25 @@
+# Variant A (dashboard/a_streamlit/app.py). Streamlit reads this from the directory it is started in:
+#   cd dashboard/a_streamlit && ../../.venv-dashboard/bin/streamlit run app.py
+# The colours repeat the tokens of dashboard/shared/theme.css (which app.py also injects), so
+# Streamlit's own widgets match the HTML parts.
+[theme]
+base = "dark"
+primaryColor = "#f0a030"
+backgroundColor = "#1a1814"
+secondaryBackgroundColor = "#23201b"
+textColor = "#ece4d4"
+font = "monospace"
+borderColor = "#3b352c"
+baseRadius = "small"
+
+[client]
+toolbarMode = "minimal"
+showSidebarNavigation = false
+
+[server]
+headless = true
+runOnSave = false
+port = 8601
+
+[browser]
+gatherUsageStats = false
