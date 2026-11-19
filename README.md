@@ -362,6 +362,48 @@ what the engine says with what is already written before sending anything (how a
 `pytest -m kafka` checks this through the broker: the test week gives exactly the in-process engine's
 alerts and page events, also when the consumer is killed three times on the way.
 
+## Run the demo
+
+A Streamlit replay of live week 2 ([result](docs/results/live-week-2.md)). It needs no broker, no
+generated world and no API key: it reads the small export committed in `dashboard/demo/live-week-2/`
+(1.8 MB). Use a separate virtual environment. Streamlit requires pandas < 3, and the project's `.venv`
+runs on pandas 3.1.
+
+```bash
+python3 -m venv .venv-dashboard
+.venv-dashboard/bin/pip install -r requirements.txt -r requirements-dashboard.txt
+.venv-dashboard/bin/streamlit run dashboard/app.py          # opens http://localhost:8501
+```
+
+Move the clock with the slider, press ▶ Play (5 min, 15 min or 1 h of simulated time per tick), or jump
+with ⏭ Next page-out. The panels:
+
+- **Pages as they fire**: every page-out up to the clock, with its first alert, how many alerts its
+  page holds now, and the triage agent's current answer.
+- **Triage note** for the selected page (triage run 1 of 3): needs_human, cause, impact, evidence and
+  next step. The follow-up appears 10 minutes later, when there was one. Each note appears only once
+  the agent had written it.
+- **Series**: one series of the selected page, as 5-minute means. For a seasonal series the chart also
+  shows its expected value, a ± wobble band, the hot line (expected + 6 × wobble) and the page's alerts.
+- **Active injections**, labelled *attacker view: hidden from the system*. This panel reads the answer
+  key, which nothing in the system sees. Its expander shows the whole week, including the future of the
+  clock. Every other panel shows only what existed at the clock (`dashboard/data.py`).
+
+The expected and wobble values are recomputed with the frozen detector settings, because the engine does
+not publish them. The export compares them with the numbers printed in all 705 of the engine's seasonal
+alert texts, and they agree to the print rounding. To rebuild the export (needs the broker's
+`live-week-2-*` topics and `data_live_2/`):
+
+```bash
+python scripts/posthoc/lw2_export_topics.py && python dashboard/export_demo.py
+```
+
+`tests/test_dashboard.py` checks that nothing from after the clock leaks into the system's panels,
+that the page-outs equal the live scorer's, and that every panel renders. The render part needs
+Streamlit, so it is skipped in `.venv`. Run it with
+`PYTHONPATH=. .venv-dashboard/bin/python -m pytest tests/test_dashboard.py` (after
+`.venv-dashboard/bin/pip install pytest`).
+
 ### Inject a failure
 
 While the publisher runs it takes commands from the topic `control` and changes the readings it
@@ -414,5 +456,8 @@ dummy injection.
 | [docs/results/test-week-posthoc.md](docs/results/test-week-posthoc.md) | Post-hoc analysis: the miss, the slow detection, timing, false-alert counts |
 | [docs/live-protocol.md](docs/live-protocol.md) | The protocol of the scripted live week: scenarios, ranges, schedule, scoring rule |
 | [docs/results/live-week-1.md](docs/results/live-week-1.md) | The live-week result, as written by the single run |
+| [docs/live-week-2-protocol.md](docs/live-week-2-protocol.md) | Live week 2: frozen detector, triage agent and attacker on a new world, with predictions |
+| [docs/results/live-week-2.md](docs/results/live-week-2.md) | The live-week-2 result, as written by the single run |
+| [docs/results/live-week-2-posthoc.md](docs/results/live-week-2-posthoc.md) | Post-hoc: predictions vs result, the two misses, target naming, generic incidents |
 | [docs/dataset.md](docs/dataset.md) | The simulated platform, the files, the replay API and the scorer |
 | [docs/scope-v3.md](docs/scope-v3.md) | The project scope |

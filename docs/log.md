@@ -874,3 +874,29 @@ Choices beyond the request, to defend or drop before the run:
 - `--resume "<reason>"` exists for technical failures only, reusing finished steps. A finished campaign is never re-recorded.
 
 The predictions are empty; the runner refuses until they are filled in and committed.
+
+## Nov 19, live week 2: predictions, the single run, post-hoc, and a demo dashboard
+
+**Predictions, then the run.** I filled in the seven predictions (each a number, a range and a sentence), committed them alone (`bc1619e`), and ran `--check`, which passed. Then I ran `--run-once` once, in a terminal. It exited 0 with one attempt and no resume. The result and the campaign's control stream are committed unedited (`bc78783`).
+
+**Result** ([live-week-2.md](results/live-week-2.md)): 11 injections (6 named, 5 generic; 5 noticeable, 6 subtle). 9 were detected (Wilson 0.52-0.95), and generic ones 5 of 5. Median time to detect was 15 min. There were 2 false page-outs (0.29 a day), and both also page with nothing injected. Triage was correct on 10 of 11 true pages in each of the 3 runs, with 0 dangerous answers. Total cost was USD 4.54.
+
+**Against the predictions, six of seven fell outside their ranges, all on the good side.** Every point prediction still lies inside the result's 95% interval. So the ranges were too narrow; the week does not show the predictions were wrong.
+
+**Post-hoc** ([live-week-2-posthoc.md](results/live-week-2-posthoc.md), labelled as written after the result; scripts in `scripts/posthoc/`):
+- The DAG pause (atk-004) had no observable effect: no run of `customer_agg` was due in the window, and its pods report nothing outside the 03:30 run.
+- The Flink leak (atk-010) peaked at z +4.7 and +4.8. The 5% relative floor set the wobble, so memory has to rise about 30% above expected before it goes hot, which takes 8-10 h at those rates. The leak lasted 7.
+- "Cause names the target" = 0 is mostly the rule: it reads the cause text only. The note's entities name the target on 14 of 15 pages.
+- The generic incidents were loud: 5-9 series each, at z 10-54. Only one was paged by a guardrail first, and it would still have been caught without it.
+
+**Dashboard (branch `dashboard`, not merged).** `dashboard/app.py` is a Streamlit replay of the week, with no broker. It reads a 1.8 MB export committed in `dashboard/demo/live-week-2/`.
+- Why export instead of reading the topics live: the demo then runs anywhere, and the files are fixed.
+- Why recompute expected and wobble: the engine does not publish them. The export checks them against the numbers in all 705 seasonal alert texts. The first version of that check failed by 66%. The cause was that a seasonal alert is stamped at the bucket that completed 3-of-5 persistence, but describes the most extreme reading in that window. With that matched correctly, they agree to the print rounding.
+- The rule "nothing from the future of the clock" lives in `dashboard/data.py`, apart from the UI, so it can be tested. The attacker panel is the only exception, and it is labelled.
+
+**An environment mistake, and the fix.** I first installed Streamlit into `.venv`. Its `pandas<3` pin downgraded pandas from 3.1 to 2.3.3, and packaging and pillow with it. This happened after the run, so the result is untouched. The post-hoc scripts and the export had run under 2.3.3. Re-run under 3.1 they give the same numbers, and the export's JSON files are byte-identical.
+- The old version was not recorded anywhere. I restored the newest releases uploaded before Nov 4 (`pip --uploaded-prior-to`): pandas 3.1.0, packaging 26.3, pillow 13.0.0. That is what the Nov 3 install of `requirements.txt` would have resolved. I removed the Streamlit tree.
+- The dashboard now has its own `.venv-dashboard` (gitignored).
+- Lesson: record `pip freeze` next to every frozen result. Live week 2's result does not name its package versions.
+
+Tests: `pytest` (default, `.venv`, pandas 3.1.0) 456 passed, 5 skipped (the render tests, no Streamlit there), in 80 s. In `.venv-dashboard`: `tests/test_dashboard.py` 16 passed, including the 5 render tests.
