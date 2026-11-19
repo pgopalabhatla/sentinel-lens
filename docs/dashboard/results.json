@@ -1,14 +1,14 @@
 {
  "target": "dashboard (static HTML + ECharts)",
  "browser_timezone": "America/Los_Angeles",
- "at": "2026-11-19T22:48:55.337Z",
+ "at": "2026-11-19T23:02:49.719Z",
  "first_render": {
   "runs_ms": [
-   2190,
-   1819,
-   2354
+   1764,
+   1586,
+   1897
   ],
-  "median_ms": 2190
+  "median_ms": 1764
  },
  "clocks": [
   {
@@ -378,13 +378,1275 @@
  "layout": [
   {
    "viewport": "1440x900",
+   "engine": "chromium",
    "ok": true,
-   "problems": []
+   "problems": [],
+   "counter": {
+    "2026-10-28T13:40Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1392.8,
+      "top": 23,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.7,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-28T13:40Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1392.8,
+      "top": 23,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.7,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1379,
+      "top": 22.5,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.7,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1379,
+      "top": 22.5,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.7,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.3,
+      "top": 23,
+      "right": 1416,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.7,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.3,
+      "top": 23,
+      "right": 1416,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.7,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    }
+   }
   },
   {
    "viewport": "1280x800",
+   "engine": "chromium",
    "ok": true,
-   "problems": []
+   "problems": [],
+   "counter": {
+    "2026-10-28T13:40Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1232.8,
+      "top": 23,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.7,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-28T13:40Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1232.8,
+      "top": 23,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.7,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1219,
+      "top": 22.5,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.7,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1219,
+      "top": 22.5,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.7,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.3,
+      "top": 23,
+      "right": 1256,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.7,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.3,
+      "top": 23,
+      "right": 1256,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.7,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    }
+   }
+  },
+  {
+   "viewport": "1440x900",
+   "engine": "webkit",
+   "ok": true,
+   "problems": [],
+   "counter": {
+    "2026-10-28T13:40Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1392.8,
+      "top": 23,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-28T13:40Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1392.8,
+      "top": 23,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1379,
+      "top": 22.5,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1379,
+      "top": 22.5,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.3,
+      "top": 23,
+      "right": 1416,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.3,
+      "top": 23,
+      "right": 1416,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    }
+   }
+  },
+  {
+   "viewport": "1280x800",
+   "engine": "webkit",
+   "ok": true,
+   "problems": [],
+   "counter": {
+    "2026-10-28T13:40Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1232.8,
+      "top": 23,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-28T13:40Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1232.8,
+      "top": 23,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1219,
+      "top": 22.5,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1219,
+      "top": 22.5,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.3,
+      "top": 23,
+      "right": 1256,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.3,
+      "top": 23,
+      "right": 1256,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    }
+   }
+  },
+  {
+   "viewport": "1440x900",
+   "engine": "firefox",
+   "ok": true,
+   "problems": [],
+   "counter": {
+    "2026-10-28T13:40Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1392.8,
+      "top": 23,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-28T13:40Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1392.8,
+      "top": 23,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.9,
+      "top": 22.5,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.9,
+      "top": 22.5,
+      "right": 1416,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.2,
+      "top": 23,
+      "right": 1416,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1296.3,
+      "top": 14,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1296.3,
+      "top": 16,
+      "right": 1416,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1296.3,
+      "top": 73.2,
+      "right": 1416,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1378.2,
+      "top": 23,
+      "right": 1416,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1310.4,
+      "top": 76.8,
+      "right": 1416,
+      "bottom": 87.2
+     },
+     "problems": []
+    }
+   }
+  },
+  {
+   "viewport": "1280x800",
+   "engine": "firefox",
+   "ok": true,
+   "problems": [],
+   "counter": {
+    "2026-10-28T13:40Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1232.8,
+      "top": 23,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-28T13:40Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1232.8,
+      "top": 23,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.9,
+      "top": 22.5,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-10-30T00:30Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.9,
+      "top": 22.5,
+      "right": 1256,
+      "bottom": 64.6
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z on load": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.2,
+      "top": 23,
+      "right": 1256,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    },
+    "2026-11-01T01:00Z after scroll + reload": {
+     "scrollY": 0,
+     "counter": {
+      "left": 1136.3,
+      "top": 14,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "number": {
+      "left": 1136.3,
+      "top": 16,
+      "right": 1256,
+      "bottom": 73.2
+     },
+     "label": {
+      "left": 1136.3,
+      "top": 73.2,
+      "right": 1256,
+      "bottom": 88.6
+     },
+     "numberInk": {
+      "left": 1218.2,
+      "top": 23,
+      "right": 1256,
+      "bottom": 65.1
+     },
+     "labelInk": {
+      "left": 1150.4,
+      "top": 76.8,
+      "right": 1256,
+      "bottom": 87.2
+     },
+     "problems": []
+    }
+   }
   }
  ],
  "slider": {
@@ -410,9 +1672,9 @@
  ],
  "play_through": {
   "simulated_hours": 168,
-  "wall_ms": 67306,
+  "wall_ms": 67244,
   "ideal_ms": 67200,
-  "ms_per_tick": 401,
+  "ms_per_tick": 400,
   "final_page_count": 13,
   "count_monotonic": true,
   "ok": true

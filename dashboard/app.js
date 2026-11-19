@@ -17,6 +17,10 @@ async function loadData() {
   return { demo, series };
 }
 
+// open at the top: every view rewrites the URL, and a reload would otherwise restore an old scroll position
+// and cut off the strip (clock, controls, page-out counter)
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+
 const { demo, series } = await loadData();
 const S = demo.settings, START = demo.meta.start_ms, END = demo.meta.end_ms;
 const state = { ...readUrl(location.search, START, END, S.default_speed_min), playing: false, allChips: false };
@@ -328,4 +332,5 @@ function renderKey() {
 window.addEventListener("resize", () => chart && chart.resize());
 window.__sl = { state, get chart() { return chart; }, demo, FIRING_MS };     // read by the Playwright checks only
 render();
+window.scrollTo(0, 0);
 document.body.dataset.ready = "1";
