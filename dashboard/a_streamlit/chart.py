@@ -29,9 +29,8 @@ def series_chart(dm: D.Demo, ui: dict, page: dict, sid: str, t: int, reveal: boo
     seasonal = info_rule == "seasonal"
     alerts = [a for a in page["alerts"] if a["target"] == sid and a["time"] >= frm]
     down = bool(alerts) and all(a["direction"] == "down" for a in alerts)
-    # times as float ms: Streamlit sends DataFrames as Arrow, and an int64 column arrives in the browser as a
-    # BigInt, which Vega cannot place on a time scale
-    rows = pd.DataFrame(D.series_points(dm, sid, D._ts(t * 1_000_000), lookback), columns=["ts", "value", "expected", "wobble"]).astype(float)
+    # times as epoch ms (float; int64 draws the same, checked in a scratch app)
+    rows =pd.DataFrame(D.series_points(dm, sid, D._ts(t * 1_000_000), lookback), columns=["ts", "value", "expected", "wobble"]).astype(float)
     if seasonal and not rows.empty:
         rows = rows.assign(lo=rows.expected - rows.wobble, hi=rows.expected + rows.wobble,
                            hot=rows.expected + (-1 if down else 1) * SETTINGS["hot_z"] * rows.wobble)
