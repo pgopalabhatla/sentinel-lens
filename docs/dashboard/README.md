@@ -20,8 +20,8 @@ Made by `dashboard/e2e/check.mjs` (`pytest -m ui`): Chromium, browser time zone 
 | No truncation: 119 strings shown in full, nothing clipped | pass |
 | Answer key off by default; when on, labelled "hidden from the system", all 11 injections | pass |
 | Keyboard: space play/pause (also with a button focused), N next page, R answer key; hint shown | pass |
-| Full play-through, 168 ticks at 1 h / tick | 67.3 s (400 ms / tick, target 400) |
-| Time to first render, median of 3 cold loads (fonts and ECharts over the network) | 1353 ms |
+| Full play-through, 168 ticks at 1 h / tick | 67.3 s (401 ms / tick, target 400) |
+| Time to first render, median of 3 cold loads (fonts and ECharts over the network) | 1321 ms |
 
 Each new check was first shown to fail on a broken page:
 - The chart window put back on the clock (the original bug) failed the every-page check. For example,

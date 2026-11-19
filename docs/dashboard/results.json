@@ -1,14 +1,14 @@
 {
  "target": "dashboard (static HTML + ECharts)",
  "browser_timezone": "America/Los_Angeles",
- "at": "2026-11-19T22:35:41.918Z",
+ "at": "2026-11-19T22:40:29.578Z",
  "first_render": {
   "runs_ms": [
-   1349,
-   1419,
-   1353
+   1488,
+   1321,
+   1206
   ],
-  "median_ms": 1353
+  "median_ms": 1321
  },
  "clocks": [
   {
@@ -409,9 +409,9 @@
  ],
  "play_through": {
   "simulated_hours": 168,
-  "wall_ms": 67251,
+  "wall_ms": 67295,
   "ideal_ms": 67200,
-  "ms_per_tick": 400,
+  "ms_per_tick": 401,
   "final_page_count": 13,
   "count_monotonic": true,
   "ok": true
