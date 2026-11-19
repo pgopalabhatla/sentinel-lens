@@ -1,13 +1,10 @@
-"""The demo dashboard (dashboard/): the exported files load, nothing from the future of the clock leaks
-into the system's panels, the page-outs agree with the live scorer's, and every panel renders.
-
-The render test needs requirements-dashboard.txt (Streamlit); it is skipped without it. The rest needs
-only the committed demo files.
+"""The demo dashboard's data (dashboard/data.py): the exported files load, nothing from the future of the
+clock leaks into the system's panels, and the page-outs agree with the live scorer's. Needs only the
+committed demo files. The page itself: tests/test_dashboard_page.py.
 """
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -77,23 +74,3 @@ def test_a_note_appears_only_once_written(dm):
     ready = D._ts(note["as_of"]) + pd.Timedelta(seconds=note["seconds"])
     assert not [r for r in D.notes_for(dm, note["page"], ready - pd.Timedelta(seconds=1)) if r["type"] == "note"]
     assert [r for r in D.notes_for(dm, note["page"], ready) if r["type"] == "note"]
-
-
-@pytest.mark.parametrize("clock", [datetime(2026, 10, 26, 0, 0), datetime(2026, 10, 26, 0, 30),
-                                   datetime(2026, 10, 28, 13, 40), datetime(2026, 10, 29, 0, 20),
-                                   datetime(2026, 11, 2, 0, 0)])
-def test_app_renders_every_panel(clock):
-    AppTest = pytest.importorskip("streamlit.testing.v1", reason="needs requirements-dashboard.txt "
-                                  "(use .venv-dashboard, see README: Run the demo)").AppTest
-    at = AppTest.from_file(str(ROOT / "dashboard" / "app.py"), default_timeout=60)
-    at.session_state["clock"] = clock
-    at.run()
-    assert not at.exception, [e.value for e in at.exception]
-    heads = [h.value for h in at.subheader]
-    assert {"Pages as they fire", "Active injections", "Triage note", "Series"} <= set(heads)
-    assert any("Attacker view: hidden from the system" in w.value for w in at.warning)
-    if clock > datetime(2026, 10, 26, 0, 15):            # the first page-out is at 00:15
-        assert at.dataframe, "the pages table"
-        assert at.get("arrow_vega_lite_chart"), "the series chart"
-        md = " ".join(m.value for m in at.markdown)
-        assert "needs_human" in md and "**Cause**" in md and "**Impact**" in md

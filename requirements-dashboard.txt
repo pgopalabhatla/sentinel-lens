@@ -1,5 +1,0 @@
-# The demo dashboard only (dashboard/app.py), on top of requirements.txt. Not needed by the detectors.
-# Streamlit for the UI; Altair (Streamlit's own chart library) for the expected/wobble band.
-# Pinned together: older Streamlit pulls Altair 5.x, which does not import on Python 3.14.
-streamlit==1.52.2
-altair==6.0.0

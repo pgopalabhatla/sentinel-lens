@@ -1,5 +1,5 @@
 .venv/
-# the demo dashboard's own venv: Streamlit pins pandas<3, so it must not share .venv (pandas 3.1)
+# the venv of the earlier Streamlit dashboard (branch dashboard-v2): Streamlit pins pandas<3
 .venv-dashboard/
 __pycache__/
 .pytest_cache/
@@ -13,7 +13,5 @@ data_live/
 data_live_2/
 # triage agent transcripts (sentinel_stream/investigator.py)
 runs/
-# dashboard variants: node packages, Vite build, the single-page build of variant B
+# the dashboard's Playwright checks (dashboard/e2e)
 node_modules/
-dashboard/c_react/dist/
-dashboard/b_static/dist/

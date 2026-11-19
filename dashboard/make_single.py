@@ -1,6 +1,6 @@
-"""Variant B as ONE self-contained HTML file, for publishing as a single page.
+"""The dashboard as ONE self-contained HTML file, to share or publish as a single page.
 
-    python dashboard/b_static/make_single.py      # -> dashboard/b_static/dist/sentinel-lens-week2.html
+    python dashboard/make_single.py      # -> dashboard/dist/sentinel-lens-week2.html (committed)
 
 No bundler: it concatenates the same files the served page loads (theme.css, shared/format.js,
 shared/visibility.js, app.js) and inlines demo.json + series.json as a JSON script tag. ECharts and the
@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DASH = HERE.parent
+DASH = HERE
 OUT = HERE / "dist" / "sentinel-lens-week2.html"
 
 
@@ -31,10 +31,10 @@ def build() -> str:
     data = {"demo": json.loads((ui / "demo.json").read_text()), "series": json.loads((ui / "series.json").read_text())}
     blob = json.dumps(data, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
     code = "\n".join(module(p) for p in (DASH / "shared" / "format.js", DASH / "shared" / "visibility.js", HERE / "app.js"))
-    page = page.replace('<link rel="stylesheet" href="../shared/theme.css">', f"<style>\n{css}\n</style>")
+    page = page.replace('<link rel="stylesheet" href="shared/theme.css">', f"<style>\n{css}\n</style>")
     page = page.replace('<script type="module" src="app.js"></script>',
                         f'<script type="application/json" id="demo-data">{blob}</script>\n<script type="module">\n{code}\n</script>')
-    assert 'href="../' not in page and 'src="app.js"' not in page and not re.search(r"^import ", code, re.M), \
+    assert 'href="shared/' not in page and 'src="app.js"' not in page and not re.search(r"^import ", code, re.M), \
         "a reference to a local file survived"
     return page
 

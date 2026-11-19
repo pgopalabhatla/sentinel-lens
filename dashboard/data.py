@@ -11,10 +11,10 @@ records that exist at `t`:
     a 5-minute reading     from the END of its bucket (ts + 5 min): its mean is not known before
     an injection (attacker view, hidden from the system)   active while start <= t < stop
 
-Kept free of Streamlit so the no-future rule can be tested directly (tests/test_dashboard.py).
+Kept free of any UI code so the no-future rule can be tested directly (tests/test_dashboard.py).
 
 `ui_state(demo, t)` is everything the system's panels show at `t`, as plain JSON. The JavaScript
-dashboards (dashboard/b_static, dashboard/c_react) use a port of it, dashboard/shared/visibility.js,
+dashboard (dashboard/index.html) uses a port of it, dashboard/shared/visibility.js,
 and tests/test_dashboard_ui.py checks that the port gives exactly the same output at the same clocks.
 """
 from __future__ import annotations

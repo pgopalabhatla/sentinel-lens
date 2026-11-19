@@ -1,10 +1,11 @@
-// Variant B: one static page, no build step. ECharts from a CDN (SVG renderer), data from demo.json.
-// What may be shown at the clock comes only from ../shared/visibility.js (the tested port of
-// dashboard/data.py); this file only draws it.
-import { uiState, seriesPoints, attackerView, nextPageOut } from "../shared/visibility.js";
-import { hhmm, hhmmss, day, isoMinute, verdictText, verdictClass, speedLabel, readUrl, fmtNum } from "../shared/format.js";
+// The live week 2 replay: one static page, no build step. ECharts from a CDN (SVG renderer), data from
+// demo/live-week-2/ui/demo.json. What may be shown at the clock comes only from shared/visibility.js (the
+// tested port of dashboard/data.py); this file only draws it. Chosen over a Streamlit and a React build:
+// docs/dashboard-compare/README.md.
+import { uiState, seriesPoints, attackerView, nextPageOut } from "./shared/visibility.js";
+import { hhmm, hhmmss, day, isoMinute, verdictText, verdictClass, speedLabel, readUrl, fmtNum } from "./shared/format.js";
 
-const DATA = "../demo/live-week-2/ui/";
+const DATA = "demo/live-week-2/ui/";
 const H = 3600e3;
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);

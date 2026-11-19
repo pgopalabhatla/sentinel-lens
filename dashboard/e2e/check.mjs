@@ -1,25 +1,26 @@
-// One Playwright script for every dashboard variant (docs/dashboard-compare/README.md).
+// The dashboard's browser checks (dashboard/index.html). The same script, with three variants, chose this
+// dashboard: docs/dashboard-compare/README.md (that version is on branch dashboard-v2).
 //
-//   cd dashboard/e2e && npm install && npx playwright install chromium
-//   node compare.mjs            # all three: a (Streamlit), b (static), c (React)
-//   node compare.mjs b c        # some
+//   cd dashboard/e2e && npm install && npx playwright install chromium && node check.mjs
 //
-// For each variant it starts the variant's own server, then, through the same URL contract
-// (?t=<ISO>&page=<n>&series=<id>&reveal=1&speed=<min>) and the same DOM contract (data-testid=clock,
-// page-count, page-card[data-page], page-detail, verdict, note, cause, impact, evidence, ...):
+// It serves dashboard/ itself, then, through the URL contract (?t=<ISO>&page=<n>&series=<id>&reveal=1&speed=<min>)
+// and the DOM's data-testid hooks:
 //   - screenshots at 5 fixed clock times x 2 viewports (+1 with the answer key revealed)
 //   - no future data in the system panels, against the reference view (visibility.js, which
 //     tests/test_dashboard_ui.py checks equals dashboard/data.py)
-//   - chart: x labels are UTC 24 h, and the alert / page / change markers sit where those labels say
+//   - the first triage card is the final answer: its answer equals the headline badge, earlier notes follow
+//   - chart: x labels are UTC 24 h, the alert / page / change markers sit where those labels say, and the line
+//     starts at the window's left edge (no gap; at the start of the week that is the quiet-world history)
 //   - select page 14 then page 17: page 17 shows only its own notes (the chg-0007 regression)
 //   - no ellipsis truncation in reason, cause, impact, evidence (full text present, nothing clipped)
+//   - keyboard: space play/pause, N next page, R answer key
 //   - time to first render (median of 3 cold loads) and a full play-through at 1 h / tick
-// Results: docs/dashboard-compare/<variant>/results.json and the PNGs next to it.
+// Results: docs/dashboard/results.json and the PNGs next to it.
 //
 // The browser runs in America/Los_Angeles on purpose: any axis drawn in local time shows up as a
 // 7-8 hour offset between the labels and the markers.
 import { chromium } from "playwright";
-import { spawn, execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +30,7 @@ import { verdictText } from "../shared/format.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DASH = resolve(HERE, "..");
 const ROOT = resolve(DASH, "..");
-const OUT = join(ROOT, "docs", "dashboard-compare");
+const OUT = join(ROOT, "docs", "dashboard");
 const UI = join(DASH, "demo", "live-week-2", "ui");
 const demo = JSON.parse(readFileSync(join(UI, "demo.json"), "utf8"));
 const H = 3600e3, LOOKBACK = demo.settings.lookback_hours;
@@ -39,38 +40,12 @@ export const VIEWPORTS = [[1440, 900], [1280, 800]];
 const PAGE_SWITCH_CLOCK = "2026-11-01T01:00Z";       // pages 14 and 17 both exist, page 17's follow-up is written
 const TZ = "America/Los_Angeles";
 
-const VARIANTS = {
-  a: {
-    name: "A: Streamlit", port: 8601, path: "/",
-    server: () => spawn(join(ROOT, ".venv-dashboard", "bin", "streamlit"),
-      ["run", "app.py", "--server.port", "8601", "--server.address", "127.0.0.1", "--server.headless", "true"],
-      { cwd: join(DASH, "a_streamlit"), stdio: "ignore" }),
-    chartSvg: '[class*="st-key-chart-"] .vega-embed svg', detailRoot: ".st-key-detail", timelineRoot: ".st-key-timeline",
-    chartSeries: '[data-testid="chart-meta"]',
-    cardClick: (n) => `.st-key-open-${n} button`,
-    async settle(page) {
-      await page.waitForSelector('[data-testid="ready"]', { state: "attached", timeout: 60e3 });
-      await page.waitForFunction(() => {
-        const app = document.querySelector('[data-testid="stApp"]');
-        return app && app.getAttribute("data-test-script-state") === "notRunning" && !document.querySelector('[data-stale="true"]');
-      }, null, { timeout: 60e3 });
-    },
-  },
-  b: {
-    name: "B: static HTML + ECharts", port: 8600, path: "/b_static/index.html",
-    server: () => spawn("python3", ["-m", "http.server", "8600", "--bind", "127.0.0.1"], { cwd: DASH, stdio: "ignore" }),
-    chartSvg: '[data-testid="chart"] svg', chartSeries: '[data-testid="chart"]', detailRoot: ".sl-detail", timelineRoot: '[data-testid="timeline"]',
-    cardClick: (n) => `[data-testid="page-card"][data-page="${n}"]`,
-    async settle(page) { await page.waitForSelector('body[data-ready="1"]', { timeout: 60e3 }); },
-  },
-  c: {
-    name: "C: React + Vite + Recharts", port: 8602, path: "/",
-    build: () => execSync("npm run build", { cwd: join(DASH, "c_react"), stdio: "ignore" }),
-    server: () => spawn("npm", ["run", "preview"], { cwd: join(DASH, "c_react"), stdio: "ignore" }),
-    chartSvg: '[data-testid="chart"] svg.recharts-surface', chartSeries: '[data-testid="chart"]', detailRoot: ".sl-detail", timelineRoot: '[data-testid="timeline"]',
-    cardClick: (n) => `[data-testid="page-card"][data-page="${n}"]`,
-    async settle(page) { await page.waitForSelector('body[data-ready="1"]', { timeout: 60e3 }); },
-  },
+const TARGET = {
+  name: "dashboard (static HTML + ECharts)", port: 8600, path: "/index.html",
+  server: () => spawn("python3", ["-m", "http.server", "8600", "--bind", "127.0.0.1"], { cwd: DASH, stdio: "ignore" }),
+  chartSvg: '[data-testid="chart"] svg', chartSeries: '[data-testid="chart"]', detailRoot: ".sl-detail", timelineRoot: '[data-testid="timeline"]',
+  cardClick: (n) => `[data-testid="page-card"][data-page="${n}"]`,
+  async settle(page) { await page.waitForSelector('body[data-ready="1"]', { timeout: 60e3 }); },
 };
 
 // ---------------------------------------------------------------- helpers
@@ -136,7 +111,12 @@ async function readChart(page, svgSel) {
       .map((l) => ({ text: l.text, x: l.r.left + l.r.width / 2, y: l.r.top }));
     const rgb = (c) => (c.match(/\d+(\.\d+)?/g) || []).slice(0, 3).map(Number);
     const near = (c, ref) => { const [r, g, b] = rgb(c); return Math.abs(r - ref[0]) < 12 && Math.abs(g - ref[1]) < 12 && Math.abs(b - ref[2]) < 12; };
-    const AMBER = [240, 160, 48], TEAL = [111, 165, 154];
+    const AMBER = [240, 160, 48], TEAL = [111, 165, 154], VALUE = [236, 228, 212];
+    let lineLeft = null;                                          // the 5-min mean line: widest stroke in the value colour
+    for (const el of svg.querySelectorAll("path, polyline")) {
+      const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+      if (r.width > 50 && near(cs.stroke, VALUE) && cs.fill === "none" && (lineLeft === null || r.left < lineLeft)) lineLeft = r.left;
+    }
     let plotTop = Infinity, plotBottom = -Infinity;
     const marks = [];
     for (const el of svg.querySelectorAll("line, path")) {
@@ -149,7 +129,7 @@ async function readChart(page, svgSel) {
       if (kind) marks.push({ kind, x: r.left + r.width / 2 });
       plotTop = Math.min(plotTop, r.top); plotBottom = Math.max(plotBottom, r.bottom);
     }
-    return { box: { left: box.left, right: box.right, width: box.width }, xLabels, marks, allText: labels.map((l) => l.text) };
+    return { box: { left: box.left, right: box.right, width: box.width }, xLabels, marks, lineLeft, allText: labels.map((l) => l.text) };
   }, svgSel);
 }
 
@@ -191,6 +171,11 @@ function checkChart(drawn, exp, t, tolPx = 3) {
     if (got.length !== want.length) fail(`${kind}: ${got.length} drawn, ${want.length} expected`);
     if (offsets.some((o) => !(o <= tolPx))) fail(`${kind}: a marker is ${Math.max(...offsets).toFixed(1)} px from where the labels put its time`);
   }
+  // no gap: the line starts at the window's left edge (at the start of the week: the quiet-world history)
+  out.lineStartOffsetPx = drawn.lineLeft == null ? null : +Math.abs(drawn.lineLeft - fit.at(exp.from)).toFixed(2);
+  if (!(out.lineStartOffsetPx <= tolPx)) fail(`the line starts ${out.lineStartOffsetPx} px from the window's left edge`);
+  const streamInWindow = demo.meta.start_ms > exp.from;
+  if (streamInWindow !== drawn.allText.includes("stream starts")) fail(`"stream starts" marker ${streamInWindow ? "missing" : "shown outside the window"}`);
   return out;
 }
 
@@ -207,6 +192,7 @@ async function checkClock(v, ctx, clock) {
     detail: Number(document.querySelector('[data-testid="page-detail"]')?.dataset.page) || null,
     verdict: document.querySelector('[data-testid="verdict"]')?.textContent.trim() ?? null,
     notes: [...document.querySelectorAll('[data-testid="page-detail"] [data-testid="note"]')].map((n) => n.dataset.type),
+    firstCardAnswer: document.querySelector('[data-testid="page-detail"] [data-testid="note"] [data-testid="note-verdict"]')?.textContent.trim() ?? null,
     details: document.querySelectorAll('[data-testid="page-detail"]').length,
     system: [document.querySelector(timelineRoot), document.querySelector(detailRoot)].map((e) => e?.innerText || "").join("\n"),
     answerKey: !!document.querySelector('[data-testid="answer-key"]'),
@@ -222,8 +208,11 @@ async function checkClock(v, ctx, clock) {
   if (sel) {
     if (dom.detail !== sel.page) fail(`detail shows page ${dom.detail}, expected the newest, ${sel.page}`);
     if (dom.verdict !== verdictText(sel.verdict)) fail(`verdict "${dom.verdict}", expected "${verdictText(sel.verdict)}"`);
-    const notes = ref.notes[String(sel.page)].filter((n) => n.type !== "link").map((n) => n.type);
+    // the final answer first (the follow-up when there is one), then earlier notes, newest first
+    const notes = ref.notes[String(sel.page)].filter((n) => n.type !== "link").map((n) => n.type).reverse();
     if (JSON.stringify(dom.notes) !== JSON.stringify(notes)) fail(`notes ${dom.notes}, expected ${notes}`);
+    r.firstCardAnswer = dom.firstCardAnswer;
+    if (notes.length && dom.firstCardAnswer !== dom.verdict) fail(`first card says "${dom.firstCardAnswer}", headline badge "${dom.verdict}"`);
   }
   // nothing the system had not seen: no later note, page reason or change id anywhere in the system panels
   const future = [];
@@ -274,9 +263,8 @@ async function checkPageSwitch(v, ctx) {
   if (d14.page !== 14 || !d14.text.includes("chg-0007")) fail(`after selecting 14: detail page ${d14.page}, chg-0007 ${d14.text.includes("chg-0007")}`);
   // detail() just opened page 14's evidence; page 17's must start collapsed (no state carried over)
   await page.click(v.cardClick(17)); await settle(v, page, true);
-  const carried = await page.evaluate((root) => [...document.querySelectorAll(root + ' details[data-testid="evidence"]')]
-    .filter((d) => d.open).length, v.detailRoot);
-  if (carried) fail(`page 17 opens with ${carried} evidence section(s) already expanded (carried over from page 14)`);
+  const carried = await page.evaluate((root) => [...document.querySelectorAll(root + " details")].filter((d) => d.open).length, v.detailRoot);
+  if (carried) fail(`page 17 opens with ${carried} evidence or earlier-note section(s) already expanded (carried over from page 14)`);
   const d17 = await detail();
   r.after17 = { page: d17.page, notes: d17.notes, mentionsChg0007: d17.text.includes("chg-0007"), evidenceOpenOnArrival: carried };
   if (d17.page !== 17) fail(`detail column shows page(s) ${d17.page}`);
@@ -298,6 +286,7 @@ async function checkTruncation(v, ctx, clocks) {
     const { page, ref } = await open(v, ctx, { t: clock });
     for (const p of ref.pages.slice(0, 3)) {                    // the three newest pages at this clock
       if (p !== ref.pages[0]) { await page.click(v.cardClick(p.page)); await settle(v, page, true); }
+      for (const s of await page.$$('[data-testid="page-detail"] details[data-testid="earlier-note"] > summary')) await s.click();
       for (const s of await page.$$('[data-testid="page-detail"] details[data-testid="evidence"] > summary')) await s.click();
       await page.waitForTimeout(100);
       const notes = ref.notes[String(p.page)].filter((x) => x.type !== "link");
@@ -349,6 +338,36 @@ async function checkAnswerKey(v, ctx) {
   return r;
 }
 
+async function checkKeyboard(v, ctx) {
+  const { page } = await open(v, ctx, { t: "2026-10-26T00:00Z" });
+  const r = { ok: true, problems: [] };
+  const fail = (m) => { r.ok = false; r.problems.push(m); };
+  const clock = () => page.evaluate(() => Number(document.querySelector('[data-testid="clock"]').dataset.ms));
+  const hint = await page.evaluate(() => document.querySelector('[data-testid="shortcuts"]')?.innerText || "");
+  if (!/space/i.test(hint) || !/\bN\b/.test(hint) || !/\bR\b/.test(hint)) fail(`shortcut hint missing or incomplete: "${hint}"`);
+  await page.keyboard.press("n");
+  const first = demo.page_records.find((x) => x.kind === "paged");
+  if ((await clock()) !== ms(first.emitted_at)) fail("N did not jump to the first page-out");
+  await page.keyboard.press("r");
+  if (!(await page.$('[data-testid="answer-key"]'))) fail("R did not show the answer key");
+  await page.keyboard.press("r");
+  if (await page.$('[data-testid="answer-key"]')) fail("R did not hide the answer key again");
+  await page.focus('[data-testid="next-page"]');             // space on a focused button must not also click it
+  const before = await clock();
+  await page.keyboard.press(" ");
+  await page.waitForTimeout(1000);
+  const label = await page.evaluate(() => document.querySelector('[data-testid="play"]').textContent.trim());
+  if (label !== "Pause" || (await clock()) <= before) fail(`space did not start play (button "${label}")`);
+  if (await page.evaluate((f) => Number(document.querySelector('[data-testid="clock"]').dataset.ms) === f, before)) fail("clock did not move");
+  await page.keyboard.press(" ");
+  const stopped = await clock();
+  await page.waitForTimeout(1000);
+  if ((await clock()) !== stopped) fail("space did not pause");
+  r.hint = hint;
+  await page.close();
+  return r;
+}
+
 async function firstRender(v, browser, n = 3) {
   const times = [];
   for (let i = 0; i < n; i++) {
@@ -363,7 +382,7 @@ async function firstRender(v, browser, n = 3) {
 async function playThrough(v, ctx) {
   const { page } = await open(v, ctx, { t: "2026-10-26T00:00Z", speed: "60" });
   const end = demo.meta.end_ms;
-  const playSel = v === VARIANTS.a ? ".st-key-play button" : '[data-testid="play"]';
+  const playSel = '[data-testid="play"]';
   const counts = [];
   const t0 = Date.now();
   await page.click(playSel);
@@ -408,49 +427,50 @@ async function screenshots(v, browser, dir) {
 }
 
 // ---------------------------------------------------------------- main
-async function run(key) {
-  const v = VARIANTS[key];
-  const dir = join(OUT, key);
+async function run() {
+  const v = TARGET, key = "dashboard", dir = OUT;
   mkdirSync(dir, { recursive: true });
-  if (v.build) v.build();
   const server = v.server();
   try {
     await waitPort(v.port);
     const browser = await chromium.launch();
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, timezoneId: TZ, reducedMotion: "reduce" });
-    // a throwaway load first, so the server's own warm-up (Streamlit's first script run) is not counted
-    { const { page } = await open(v, ctx, { t: CLOCKS[0] }); await page.close(); }
-    const res = { variant: v.name, browser_timezone: TZ, at: new Date().toISOString() };
+    { const { page } = await open(v, ctx, { t: CLOCKS[0] }); await page.close(); }   // a throwaway load first
+    const res = { target: v.name, browser_timezone: TZ, at: new Date().toISOString() };
     if (process.env.ONLY) {                             // quick runs while checking the checks themselves
       const only = process.env.ONLY;
       if (only === "clocks") res.clocks = await Promise.all([CLOCKS[0], CLOCKS[3]].map((c) => checkClock(v, ctx, c)));
       if (only === "switch") res.page_switch_14_17 = await checkPageSwitch(v, ctx);
       if (only === "trunc") res.truncation = await checkTruncation(v, ctx, [CLOCKS[3]]);
+      if (only === "keys") res.keyboard = await checkKeyboard(v, ctx);
       console.log(key, JSON.stringify(res, (k, x) => (k === "labels" ? undefined : x)).slice(0, 1500));
       await browser.close();
       return res;
     }
     res.first_render = await firstRender(v, browser);
     res.clocks = [];
-    for (const c of [...CLOCKS, PAGE_SWITCH_CLOCK, "2026-10-26T00:00Z", "2026-11-02T00:00Z"]) res.clocks.push(await checkClock(v, ctx, c));
+    for (const c of [...CLOCKS, PAGE_SWITCH_CLOCK, "2026-10-26T00:00Z", "2026-10-26T00:15Z", "2026-11-02T00:00Z"]) res.clocks.push(await checkClock(v, ctx, c));
     res.page_switch_14_17 = await checkPageSwitch(v, ctx);
     res.truncation = await checkTruncation(v, ctx, [CLOCKS[1], CLOCKS[3], CLOCKS[4]]);
     res.answer_key = await checkAnswerKey(v, ctx);
+    res.keyboard = await checkKeyboard(v, ctx);
     res.screenshots = await screenshots(v, browser, dir);
     res.play_through = await playThrough(v, ctx);
     res.summary = {
       no_future_data: res.clocks.every((c) => !c.problems.some((p) => /future|card from after|answer key|not yet streamed|page count|cards|clock shows|notes|verdict|detail shows/.test(p))),
-      chart_utc_and_markers: res.clocks.every((c) => !c.chart || c.chart.ok),
+      first_card_is_the_answer_in_the_badge: res.clocks.every((c) => !c.problems.some((p) => /first card/.test(p))),
+      chart_utc_markers_no_gap: res.clocks.every((c) => !c.chart || c.chart.ok),
       page_switch_14_17: res.page_switch_14_17.ok,
       no_truncation: res.truncation.ok,
       answer_key_labelled: res.answer_key.ok,
+      keyboard: res.keyboard.ok,
       play_through: res.play_through.ok,
       all_clock_checks: res.clocks.every((c) => c.ok),
     };
     writeFileSync(join(dir, "results.json"), JSON.stringify(res, null, 1));
     console.log(key, JSON.stringify(res.summary), `first render ${res.first_render.median_ms} ms`, `play-through ${res.play_through.wall_ms} ms`);
     for (const c of res.clocks) if (!c.ok) console.log("  ", c.clock, c.problems.join(" | "));
-    for (const k of ["page_switch_14_17", "truncation", "answer_key"]) if (!res[k].ok) console.log("  ", k, res[k].problems.join(" | "));
+    for (const k of ["page_switch_14_17", "truncation", "answer_key", "keyboard"]) if (!res[k].ok) console.log("  ", k, res[k].problems.join(" | "));
     await browser.close();
     return res;
   } finally {
@@ -458,5 +478,4 @@ async function run(key) {
   }
 }
 
-const keys = process.argv.slice(2).length ? process.argv.slice(2) : ["a", "b", "c"];
-for (const k of keys) await run(k);
+await run();
