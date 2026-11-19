@@ -1,0 +1,12 @@
+{
+  "name": "sentinel-lens-dashboard-e2e",
+  "private": true,
+  "type": "module",
+  "description": "One Playwright script for every dashboard variant (docs/dashboard-compare/README.md)",
+  "scripts": {
+    "compare": "node compare.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}
