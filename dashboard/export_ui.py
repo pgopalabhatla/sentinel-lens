@@ -47,6 +47,7 @@ def build(dm: D.Demo) -> tuple[dict, dict]:
         index[sid] = {"rule": g["rule"].iloc[0], "label": D.label(sid), "entity": sid.split("|")[-1]}
     demo = {
         "meta": {**dm.meta, "start_ms": D.ms(dm.start), "end_ms": D.ms(dm.end),
+                 "history_start_ms": D.ms(dm.meta.get("history_start", dm.start)),
                  "bucket_ms": D.ms(dm.start + dm.bucket) - D.ms(dm.start)},
         "settings": SETTINGS,
         "page_records": dm.pages,

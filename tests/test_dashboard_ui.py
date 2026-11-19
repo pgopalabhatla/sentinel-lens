@@ -91,3 +91,16 @@ def test_js_port_equals_python_at_the_same_clocks(dm):
         py = json.loads(json.dumps(_python_view(dm, clock)))       # same JSON round trip as the JS side
         assert js[clock] == py, clock
     assert js[CLOCKS[-1]]["ui"]["page_count"] == 13 and js[CLOCKS[0]]["ui"]["page_count"] == 0
+
+
+def test_the_first_window_has_no_gap(dm):
+    """At the stream start the chart's 12 h window is the quiet world's history, which the engine had then:
+    every page's series has a reading in every 5-minute bucket of the window from the first clock on."""
+    start = D.ms(dm.start)
+    for clock in ("2026-10-26T00:15Z", "2026-10-26T04:30Z"):
+        t = D.ms(clock)
+        for p in D.ui_state(dm, clock)["pages"]:
+            for sid in p["series"]:
+                rows = D.series_points(dm, sid, clock)
+                assert rows[0][0] == t - 12 * 3600_000 and rows[0][0] < start, sid
+                assert all(b[0] - a[0] == 300_000 for a, b in zip(rows, rows[1:]))

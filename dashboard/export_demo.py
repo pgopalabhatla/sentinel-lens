@@ -12,7 +12,8 @@ What is written (all from the recorded run; nothing is re-run):
     changes.json      the change log as streamed (stream v2 'changes' records), each change with the stream
                       record's time as `streamed_at`: the system (the triage agent's recent_changes) sees a
                       change from then, not from the change's own `ts`
-    series.csv.gz     for every series that appears in a page: 5-minute means over the 7-day stream, and
+    series.csv.gz     for every series that appears in a page: 5-minute means over the 7-day stream and the
+                      12 h of quiet-world history before it (what the engine had; the chart's first window), and
                       for seasonal series the expected value and wobble, recomputed with the frozen
                       seasonal_scores and the router's per-series settings (history, abs_floor)
     meta.json         stream bounds, counts, and how the files were made
@@ -37,6 +38,9 @@ from lw2_common import DATA, load, metric_series  # noqa: E402
 
 OUT = ROOT / "dashboard" / "demo" / "live-week-2"
 START, END = pd.Timestamp("2026-10-26T00:00Z"), pd.Timestamp("2026-11-02T00:00Z")
+# the chart shows the last 12 h; at the start of the week those hours are the quiet world's history before the
+# stream, which the engine also had (metric_series). Exported so no chart starts with a gap.
+HISTORY = pd.Timedelta(hours=12)
 NOTE_FIELDS = ("type", "page", "page_id", "paged_at", "as_of", "seconds", "needs_human", "confidence", "cause",
                "impact", "evidence", "next_step", "affected_entities", "guard", "follow_up", "follow_up_of",
                "tools_used", "absorbed", "at", "notes", "link_id")
@@ -68,7 +72,7 @@ def main() -> None:
             df = sc[["value", "expected", "wobble"]]
         else:                                           # guardrails: a rule on the value, no baseline
             df = pd.DataFrame({"value": s, "expected": float("nan"), "wobble": float("nan")})
-        df = df[(df.index >= START) & (df.index < END)].copy()
+        df = df[(df.index >= START - HISTORY) & (df.index < END)].copy()
         df["series_id"], df["rule"] = sid, route["rule"]
         frames.append(df.rename_axis("ts").reset_index())
     series = pd.concat(frames, ignore_index=True)
@@ -77,7 +81,7 @@ def main() -> None:
         series.to_csv(f, index=False, float_format="%.6g")
 
     worst = check_against_alerts(series, alerts)
-    meta = {"stream_start": str(START), "stream_end": str(END), "bucket_minutes": 5,
+    meta = {"stream_start": str(START), "stream_end": str(END), "bucket_minutes": 5, "history_start": str(START - HISTORY),
             "series": len(series_ids), "page_records": len(pages), "alerts": len(alerts),
             "page_outs": sum(r["kind"] == "paged" for r in pages), "triage_run": 1, "changes": len(changes),
             "expected_vs_alert_explanations_worst_relative_diff": worst,

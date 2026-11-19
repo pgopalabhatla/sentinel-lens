@@ -2,6 +2,7 @@
  "stream_start": "2026-10-26 00:00:00+00:00",
  "stream_end": "2026-11-02 00:00:00+00:00",
  "bucket_minutes": 5,
+ "history_start": "2026-10-25 12:00:00+00:00",
  "series": 42,
  "page_records": 854,
  "alerts": 841,

@@ -56,7 +56,8 @@ $("#app").innerHTML = `
     <div class="sl-count"><b data-testid="page-count"></b><span>page-outs so far</span></div>
   </header>
   <div class="sl-scrubrow"><input class="sl-scrub" type="range" id="scrub" aria-label="Simulated time"
-       min="${START}" max="${END}" step="${demo.meta.bucket_ms}"></div>
+       min="${START}" max="${END}" step="${demo.meta.bucket_ms}">
+    <span class="sl-keys" data-testid="shortcuts"><kbd>space</kbd> play/pause <kbd>N</kbd> next page <kbd>R</kbd> answer key</span></div>
   <main class="sl-main">
     <section class="sl-timeline" data-testid="timeline"><p class="sl-eyebrow">Pages, newest first</p><div id="cards"></div></section>
     <section class="sl-detail" id="detail"></section>
@@ -68,10 +69,25 @@ $("#app").innerHTML = `
   </section>
   <section id="key"></section>`;
 
+const nextPage = () => { const n = nextPageOut(demo, state.t); play(false); if (n != null) { state.page = null; setT(n); } };
+const toggleReveal = () => { state.reveal = !state.reveal; render(); };
 $("#play").onclick = () => play(!state.playing);
-$("#next").onclick = () => { const n = nextPageOut(demo, state.t); play(false); if (n != null) { state.page = null; setT(n); } };
+$("#next").onclick = nextPage;
 $("#speed").onchange = (e) => { state.speed = Number(e.target.value); };
 $("#reveal").onchange = (e) => { state.reveal = e.target.checked; render(); };
+
+// keyboard: space = play/pause, N = next page, R = answer key. Not while typing in a field or a select is
+// focused, and not with a modifier (browser shortcuts keep working). Space is taken over on buttons too,
+// so a focused button is not also "clicked" by it.
+const typing = (el) => el && (el.tagName === "SELECT" || el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && !["checkbox", "range"].includes(el.type)));
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return;
+  const k = e.key.toLowerCase();
+  if (k === " ") { e.preventDefault(); if (!e.repeat) play(!state.playing); }
+  else if (k === "n" && !e.repeat) nextPage();
+  else if (k === "r" && !e.repeat) toggleReveal();
+});
+document.addEventListener("keyup", (e) => { if (e.key === " " && !typing(e.target)) e.preventDefault(); });
 $("#scrub").oninput = (e) => { play(false); setT(Number(e.target.value)); };
 $("#cards").onclick = (e) => {
   const card = e.target.closest("[data-page]");
@@ -84,13 +100,16 @@ $("#detail").addEventListener("toggle", (e) => {
 }, true);
 
 // ------------------------------------------------------------------ render
-function noteCard(r, title) {
-  const id = `${r.page}-${r.type}-${r.ready_at}`;
+const noteId = (r) => `${r.page}-${r.type}-${r.ready_at}`;
+const written = (r) => `written ${day(r.ready_at)} ${hhmmss(r.ready_at)} UTC`;
+
+function noteCard(r, title, withHeading = true) {
+  const id = noteId(r);
   const ev = r.evidence || [];
   const guard = r.guard ? `<p class="sl-advisory">Guard: converted from "${esc(r.guard.converted_from)}": ${esc(r.guard.reason)}</p>` : "";
   return `<article class="sl-note" data-testid="note" data-type="${r.type}">
-    <h3>${title}<span class="sl-when">written ${day(r.ready_at)} ${hhmmss(r.ready_at)} UTC</span></h3>
-    <p><span class="sl-pill ${verdictClass(r.needs_human)}">${esc(verdictText(r.needs_human))}</span>
+    ${withHeading ? `<h3>${title}<span class="sl-when">${written(r)}</span></h3>` : ""}
+    <p><span class="sl-pill ${verdictClass(r.needs_human)}" data-testid="note-verdict">${esc(verdictText(r.needs_human))}</span>
        <span class="sl-advisory">confidence ${esc(r.confidence)} · advisory only</span></p>${guard}
     <div class="sl-field" data-testid="cause"><b>Cause · ${esc(r.cause?.category || "-")}</b><p>${esc(r.cause?.description || "-")}</p></div>
     <div class="sl-field" data-testid="impact"><b>Impact · ${esc((r.impact?.degraded || []).join(", ") || "none")}</b><p>${esc(r.impact?.description || "-")}</p></div>
@@ -104,12 +123,23 @@ function noteCard(r, title) {
 
 function renderDetail(page, notes) {
   if (!page) return `<p class="sl-eyebrow">Selected page</p><p class="sl-empty">No page-out yet. Press play or Next page.</p>`;
-  const written = notes.filter((r) => r.type !== "link");
-  const last = written[written.length - 1];
+  // the final answer first (the follow-up when there is one); earlier notes collapsed below it, each
+  // labelled with its own answer and time; merge records last
+  const notesOnly = notes.filter((r) => r.type !== "link");
+  const last = notesOnly[notesOnly.length - 1];
   const from = last ? (last.type === "follow_up" ? "from the follow-up" : "from the first note") : "no note written yet";
-  const cards = notes.map((r) => r.type === "link"
-    ? `<p class="sl-link">${hhmm(r.ready_at)} UTC: page ${esc((r.absorbed || []).join(", "))} merged into this page after it paged.</p>`
-    : noteCard(r, r.type === "follow_up" ? "Follow-up" : "Triage note")).join("");
+  const title = (r) => (r.type === "follow_up" ? "Follow-up" : "Triage note");
+  const earlier = notesOnly.slice(0, -1).reverse().map((r) => {
+    const id = noteId(r) + "-earlier";
+    return `<details class="sl-earlier" data-testid="earlier-note" data-note="${id}" ${openEvidence.has(id) ? "open" : ""}>
+      <summary>Earlier: ${title(r).toLowerCase()} · <span class="sl-pill ${verdictClass(r.needs_human)}">${esc(verdictText(r.needs_human))}</span> ${written(r)}</summary>
+      ${noteCard(r, title(r), false)}
+    </details>`;
+  }).join("");
+  const links = notes.filter((r) => r.type === "link").map((r) =>
+    `<p class="sl-link">${hhmm(r.ready_at)} UTC: page ${esc((r.absorbed || []).join(", "))} merged into this page after it paged.</p>`).join("");
+  const cards = (last ? noteCard(last, last.type === "follow_up" ? "Follow-up: the final answer" : "Triage note")
+                      : `<p class="sl-empty">The triage agent has not written a note yet.</p>`) + earlier + links;
   return `<div data-testid="page-detail" data-page="${page.page}">
     <p class="sl-eyebrow">Page ${page.page} · paged ${day(page.paged_at)} ${hhmm(page.paged_at)} UTC · ${page.alerts.length} alerts now${page.merged_into ? ` · merged into page ${page.merged_into}` : ""}</p>
     <h1 class="sl-headline" data-testid="reason-headline">${esc(page.reason)}</h1>
@@ -182,6 +212,7 @@ function renderChart(page, ui) {
     `<span><i style="border-color:var(--chart-hot);border-top-width:3px"></i>page fired</span>`,
     `<span><i style="border-color:var(--chart-change)"></i>change</span>`,
     state.reveal && `<span><i style="border-color:var(--key);border-top-width:8px"></i>injection (answer key)</span>`,
+    START > from && `<span data-testid="stream-start-legend"><i style="border-color:var(--text-faint);border-top-style:dotted"></i>stream starts (before it: the quiet-world history the engine had)</span>`,
   ].filter(Boolean).join("");
 
   const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
@@ -194,6 +225,7 @@ function renderChart(page, ui) {
     ...alerts.map((a) => ({ xAxis: a.time, name: "alert", lineStyle: { color: v("--chart-hot"), type: "dashed", width: 1, opacity: 0.75 }, label: { show: false } })),
     ...(page.paged_at >= from ? [{ xAxis: page.paged_at, name: "page", lineStyle: { color: v("--chart-hot"), type: "solid", width: 3 }, label: { show: true, formatter: `page ${page.page}`, color: v("--amber"), fontFamily: font.fontFamily, fontSize: 11, position: "insideEndTop" } }] : []),
     ...ui.changes.filter((c) => c.ts_ms >= from).map((c) => ({ xAxis: c.ts_ms, name: "change", lineStyle: { color: v("--chart-change"), type: "solid", width: 1.5 }, label: { show: true, formatter: c.change_id, color: v("--teal"), fontFamily: font.fontFamily, fontSize: 11, position: "insideEndBottom" } })),
+    ...(START > from ? [{ xAxis: START, name: "stream", lineStyle: { color: v("--text-faint"), type: "dotted", width: 1.5 }, label: { show: true, formatter: "stream starts", color: v("--text-dim"), fontFamily: font.fontFamily, fontSize: 11, position: "insideEndTop" } }] : []),
   ];
   const areas = state.reveal ? attackerView(demo, t).all.filter((i) => i.stop > from && i.start < t && i.series.includes(sid))
     .map((i) => [{ xAxis: Math.max(i.start, from), name: i.id }, { xAxis: Math.min(i.stop, t) }]) : [];

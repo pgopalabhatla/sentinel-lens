@@ -31,7 +31,9 @@ def test_export_loads_and_is_consistent(dm):
     assert dm.series["series_id"].nunique() == dm.meta["series"]
     paged_series = {r["alert"]["target"] for r in dm.pages if r["kind"] != "paged"}
     assert paged_series == set(dm.series["series_id"])
-    assert dm.series["ts"].min() >= dm.start and dm.series["ts"].max() < dm.end
+    # 12 h of quiet-world history before the stream (the chart's first window), then the stream
+    assert dm.series["ts"].min() == dm.start - pd.Timedelta(hours=12) and dm.series["ts"].max() < dm.end
+    assert D._ts(dm.meta["history_start"]) == dm.series["ts"].min()
     emitted = [D._ts(r["emitted_at"]) for r in dm.pages]
     assert emitted == sorted(emitted), "page_outs() relies on page records being in emission order"
 
