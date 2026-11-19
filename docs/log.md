@@ -999,3 +999,20 @@ All checks pass; play-through 401 ms/tick. Screenshots are now full pages.
 Tests: `pytest` (default, `.venv`) 476 passed, in 87 s. `pytest -m ui` 1 passed in 123 s.
 
 **Follow-up: the headline's series first.** Preselecting the strongest series put a different series on the chart than the one the headline names. On page 3 that was worker-1 GC time under "trino-worker-0 CPU 6.3x expected". The series that paged now comes first and is preselected, and the other chips keep the strength order. A new check selects every page (29 selections) and requires the selected chip and the charted series to equal the paging alert's series, taken from the export rather than from `view.js`. The old order fails it on page 3. All checks pass.
+
+## Nov 19, the page-out counter
+
+Reported: the top-right page-out counter was clipped at the top of the window. I could not reproduce it. In Chromium, WebKit and Firefox, at 1440x900 and 1280x800, the old page showed the whole number, with the digit's ink 1.8 px inside its box and 15 px below the window's top. The committed screenshots show it whole too, except the answer-key one, which is scrolled down on purpose.
+
+I fixed what makes it fragile instead:
+- **The glyph fit.** The number had `line-height: 0.9`, so its glyphs filled the line box almost to the edge. A browser with other font metrics, or the fallback font while Big Shoulders loads, would push the digits outside their box. The line-height is now 1.1, with 2 px of padding, which leaves 7 px of room above the digits. The label sits on its own line.
+- **The scroll on reload.** The page now scrolls naturally, and every view rewrites the URL. A reload could therefore restore an old scroll position, opening with the strip cut off. Scroll restoration is now off, and the page opens at the top.
+
+The check is stronger in three ways:
+- It measures the counter as the page opens and again after a scroll and reload; before, it scrolled to the top itself.
+- Besides the boxes of the counter, the number and the label, it measures the glyphs' ink from canvas text metrics. Each must lie inside the viewport and inside its own box.
+- The layout check now runs in WebKit and Firefox as well as Chromium.
+
+Each new check was shown to fail: a line-height of 0.5 overflowed the box, and the counter pushed 40 px up left the viewport. Since the original clipping was never reproduced, it is not confirmed that these were its cause. A screenshot of it, with the browser and zoom level, would settle that.
+
+Tests: `pytest` 476 passed. Browser checks: all pass.

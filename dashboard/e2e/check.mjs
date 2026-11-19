@@ -19,7 +19,7 @@
 //
 // The browser runs in America/Los_Angeles on purpose: any axis drawn in local time shows up as a
 // 7-8 hour offset between the labels and the markers.
-import { chromium } from "playwright";
+import { chromium, webkit, firefox } from "playwright";
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -467,21 +467,61 @@ async function checkAllPagesInWindow(v, ctx, clocks) {
   return r;
 }
 
+// The page-out counter, measured in the page: the full bounding box of the counter, of the number and of its
+// label inside the viewport; the glyphs' own ink (from canvas text metrics: a box can hold a line-height
+// smaller than its glyphs, which then overflow it) inside the viewport and inside their element; and nothing
+// covering the number or the label.
+function measureCounter() {
+  const problems = [];
+  const vw = innerWidth, vh = innerHeight, inView = (b) => b.left >= 0 && b.top >= 0 && b.right <= vw && b.bottom <= vh;
+  const box = (el) => { const b = el.getBoundingClientRect(); return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; };
+  const ink = (el) => {
+    const cs = getComputedStyle(el), b = el.getBoundingClientRect();
+    const ctx = document.createElement("canvas").getContext("2d");
+    ctx.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
+    const m = ctx.measureText(el.textContent);
+    const content = m.fontBoundingBoxAscent + m.fontBoundingBoxDescent;
+    const lh = cs.lineHeight === "normal" ? content : parseFloat(cs.lineHeight);
+    const top = b.top + parseFloat(cs.paddingTop) + (lh - content) / 2 + (m.fontBoundingBoxAscent - m.actualBoundingBoxAscent);
+    const right = cs.textAlign === "right" ? b.right - parseFloat(cs.paddingRight) : b.left + parseFloat(cs.paddingLeft) + m.width;
+    return { left: right - m.width, top, right, bottom: top + m.actualBoundingBoxAscent + m.actualBoundingBoxDescent };
+  };
+  const round = (o) => Object.fromEntries(Object.entries(o).map(([k, x]) => [k, +x.toFixed(1)]));
+  const counter = document.querySelector('[data-testid="page-counter"]');
+  const num = document.querySelector('[data-testid="page-count"]'), label = counter.querySelector("span");
+  const out = { scrollY, counter: round(box(counter)), number: round(box(num)), label: round(box(label)), numberInk: round(ink(num)), labelInk: round(ink(label)) };
+  for (const k of ["counter", "number", "label", "numberInk", "labelInk"]) if (!inView(out[k])) problems.push(`${k} not fully inside the viewport ${JSON.stringify(out[k])}`);
+  for (const [k, el] of [["numberInk", "number"], ["labelInk", "label"]]) {
+    const i = out[k], e = out[el];
+    if (i.top < e.top - 0.5 || i.bottom > e.bottom + 0.5) problems.push(`${k} overflows its element ${JSON.stringify(i)} vs ${JSON.stringify(e)}`);
+  }
+  for (const [k, el] of [["number", num], ["label", label]]) {
+    const b = el.getBoundingClientRect(), hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    if (!(hit && el.contains(hit))) problems.push(`${k} covered`);
+  }
+  out.problems = problems;
+  return out;
+}
+
 // nothing clipped: the final note's last line can be scrolled into view, uncovered and not cut by any
-// ancestor; the page-out counter is fully on screen at the top; the legend is one line
-async function checkLayout(v, browser, w, hgt) {
-  const r = { viewport: `${w}x${hgt}`, ok: true, problems: [] };
+// ancestor; the page-out counter is whole (measureCounter); the legend is one line
+async function checkLayout(v, browser, w, hgt, engine = "chromium") {
+  const r = { viewport: `${w}x${hgt}`, engine, ok: true, problems: [] };
   const fail = (m) => { r.ok = false; r.problems.push(m); };
   const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, timezoneId: TZ, reducedMotion: "reduce" });
   for (const clock of [CLOCKS[1], CLOCKS[3], CLOCKS[4]]) {
     const { page } = await open(v, ctx, { t: clock });
-    const counter = await page.evaluate(() => {
-      window.scrollTo(0, 0);
-      const el = document.querySelector('[data-testid="page-counter"]'), b = el.getBoundingClientRect();
-      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-      return { inView: b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight, hit: !!hit && el.contains(hit) };
-    });
-    if (!counter.inView || !counter.hit) fail(`${clock}: page-out counter cut off or covered (${JSON.stringify(counter)})`);
+    // the counter as the page opens (no scrolling by the check), and again after scrolling down and reloading
+    for (const when of ["on load", "after scroll + reload"]) {
+      if (when !== "on load") {
+        await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+        await page.reload(); await settle(v, page, true);
+      }
+      const c = await page.evaluate(measureCounter);
+      r.counter = r.counter || {};
+      r.counter[`${clock} ${when}`] = c;
+      if (c.problems.length) fail(`${clock} ${when}: page-out counter: ${c.problems.join("; ")}`);
+    }
     const last = await page.evaluate(() => {
       const el = [...document.querySelectorAll('[data-testid="page-detail"] > [data-testid="note"] [data-testid="next-step"] p')].pop();
       if (!el) return { missing: true };
@@ -610,6 +650,18 @@ async function checkPageView(v, ctx, clocks) {
   return r;
 }
 
+// the layout check (note readable, counter whole, legend one line) in Chromium, WebKit and Firefox at both
+// viewports: font metrics differ between engines, and a glyph that fits in one can overflow in another
+async function layoutAllEngines(v, chromiumBrowser) {
+  const out = [];
+  for (const [engine, type] of [["chromium", null], ["webkit", webkit], ["firefox", firefox]]) {
+    const br = type ? await type.launch() : chromiumBrowser;
+    for (const [w, h] of VIEWPORTS) out.push(await checkLayout(v, br, w, h, engine));
+    if (type) await br.close();
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- main
 async function run() {
   const v = TARGET, key = "dashboard", dir = OUT;
@@ -628,7 +680,7 @@ async function run() {
       if (only === "trunc") res.truncation = await checkTruncation(v, ctx, [CLOCKS[3]]);
       if (only === "keys") res.keyboard = await checkKeyboard(v, ctx);
       if (only === "window") res.window_all_pages = await checkAllPagesInWindow(v, ctx, ["2026-10-26T04:30Z", "2026-11-02T00:00Z"]);
-      if (only === "layout") res.layout = [await checkLayout(v, browser, 1440, 900), await checkLayout(v, browser, 1280, 800)];
+      if (only === "layout") res.layout = await layoutAllEngines(v, browser);
       if (only === "slider") res.slider = await checkSlider(v, ctx);
       if (only === "view") res.page_view = await checkPageView(v, ctx, [CLOCKS[0], CLOCKS[3]]);
       console.log(key, JSON.stringify(res, (k, x) => (k === "labels" ? undefined : x)).slice(0, 1500));
@@ -644,7 +696,7 @@ async function run() {
     res.keyboard = await checkKeyboard(v, ctx);
     res.window_all_pages = await checkAllPagesInWindow(v, ctx, ["2026-10-26T04:30Z", "2026-11-01T00:19Z", "2026-11-02T00:00Z"]);
     res.layout = [];
-    for (const [w, h] of VIEWPORTS) res.layout.push(await checkLayout(v, browser, w, h));
+    res.layout = await layoutAllEngines(v, browser);
     res.slider = await checkSlider(v, ctx);
     res.page_view = await checkPageView(v, ctx, [...CLOCKS, "2026-10-26T00:15Z", "2026-11-02T00:00Z"]);
     res.screenshots = await screenshots(v, browser, dir);
@@ -667,7 +719,7 @@ async function run() {
     writeFileSync(join(dir, "results.json"), JSON.stringify(res, null, 1));
     console.log(key, JSON.stringify(res.summary), `first render ${res.first_render.median_ms} ms`, `play-through ${res.play_through.wall_ms} ms`);
     for (const c of res.clocks) if (!c.ok) console.log("  ", c.clock, c.problems.join(" | "));
-    for (const l of res.layout) if (!l.ok) console.log("   layout", l.viewport, l.problems.join(" | "));
+    for (const l of res.layout) if (!l.ok) console.log("   layout", l.engine, l.viewport, l.problems.join(" | "));
     for (const k of ["page_switch_14_17", "truncation", "answer_key", "keyboard", "window_all_pages", "slider", "page_view"]) if (!res[k].ok) console.log("  ", k, res[k].problems.join(" | "));
     await browser.close();
     return res;
