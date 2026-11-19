@@ -3,13 +3,19 @@
 Branch `dashboard-v2`, off `dashboard`. Three versions of the live week 2 replay are built from one design spec
 and one data export, and tested by one script. This page shows how they compare. It does not pick a winner.
 
-| | Variant | Code | Runs in |
-|---|---|---|---|
-| A | Streamlit, restyled | [dashboard/a_streamlit/](../../dashboard/a_streamlit/) | `.venv-dashboard` |
-| B | One static HTML/JS page, ECharts from a CDN | [dashboard/b_static/](../../dashboard/b_static/) | any local web server |
-| C | React + Vite + Recharts | [dashboard/c_react/](../../dashboard/c_react/) | Node (Vite preview) |
+**Chosen afterwards: B**, now the dashboard on main ([dashboard/](../../dashboard/), checks and screenshots in
+[docs/dashboard/](../dashboard/)). It has the same look as C with the least code. It needs no build step and no
+server process, it played at the target 400 ms per tick, and it can be one shareable file. A, C and the v1
+Streamlit app were removed from main. They remain on branch `dashboard-v2`, and so does everything this page
+links to under `dashboard/a_streamlit`, `dashboard/b_static`, `dashboard/c_react` and `dashboard/e2e/compare.mjs`.
 
-The v1 dashboard ([dashboard/app.py](../../dashboard/app.py)) is unchanged. It is the baseline the spec's fixes refer to.
+| | Variant | Code (branch `dashboard-v2`) | Runs in |
+|---|---|---|---|
+| A | Streamlit, restyled | `dashboard/a_streamlit/` | `.venv-dashboard` |
+| B | One static HTML/JS page, ECharts from a CDN | `dashboard/b_static/` | any local web server |
+| C | React + Vite + Recharts | `dashboard/c_react/` | Node (Vite preview) |
+
+The v1 dashboard (`dashboard/app.py` on `dashboard-v2`) was the baseline the spec's fixes refer to.
 
 ## What is shared
 
@@ -27,7 +33,7 @@ The v1 dashboard ([dashboard/app.py](../../dashboard/app.py)) is unchanged. It i
 - **One look.** [dashboard/shared/theme.css](../../dashboard/shared/theme.css) holds the tokens as CSS
   variables: warm charcoal with a faint chart grid, amber for "needs human", muted teal for healthy, grey for
   unsure. The fonts are IBM Plex Mono and Big Shoulders Display, with one motion: a new card slides in. B and C
-  load the file as it is. A injects it, plus [streamlit.css](../../dashboard/a_streamlit/streamlit.css) to fit
+  load the file as it is. A injects it, plus `streamlit.css` to fit
   Streamlit's own wrappers to it.
 - **One URL and DOM contract**, so one script can drive all three. The URL takes
   `?t=<ISO>&page=<n>&series=<id>&reveal=1&speed=<min>`. The DOM uses the test ids `clock`, `page-count`,
@@ -57,7 +63,7 @@ local time would be off by 7-8 h.
 
 ## Check results
 
-All from [dashboard/e2e/compare.mjs](../../dashboard/e2e/compare.mjs), the same script for each variant
+All from `dashboard/e2e/compare.mjs` (branch `dashboard-v2`), the same script for each variant
 (results: [a/results.json](a/results.json), [b/results.json](b/results.json), [c/results.json](c/results.json)).
 Chromium (Playwright 1.65.1), on the same laptop, on Nov 19. The committed results are from the last run, through
 `pytest -m ui`. Every check also passed in the run before it.
@@ -149,6 +155,8 @@ These are the things that cost time, and the place each one is now guarded.
   waits for `document.fonts.ready` before each check and screenshot.
 
 ## How to run each
+
+These commands are for branch `dashboard-v2` (`git checkout dashboard-v2`). On main only B remains: see the README, "Run the demo".
 
 ```bash
 # once: the UI export (already committed; re-run after changing dashboard/demo/)

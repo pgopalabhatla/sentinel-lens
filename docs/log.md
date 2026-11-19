@@ -930,3 +930,31 @@ Choices to defend:
 - **v1 (`dashboard/app.py`) is kept unchanged** as the baseline. I did not re-measure it with the new script, which needs the new DOM contract.
 
 Tests: `pytest` (default, `.venv`) 469 passed, 11 skipped (A's chart and AppTest tests, no Streamlit there), in 83 s. In `.venv-dashboard`: the dashboard tests (`test_dashboard.py`, `test_dashboard_ui.py`, `test_dashboard_variants.py`) 35 passed. `pytest -m ui` (the Playwright comparison of all three) 1 passed in 5 min 6 s.
+
+## Nov 19, the dashboard: B chosen, polished, and made the one on main
+
+Branch `dashboard-b`, off `dashboard-v2`, merged to main. `dashboard-v2` stays as it was: the three-variant snapshot the comparison page refers to.
+
+**Why B.** It has the same look as C with the least code (239 lines of its own). It needs no build step and no server process, any static server or a file will do. It played at the target 400 ms per tick, where Streamlit managed about 520. And it can be one shareable file.
+
+**Polish.**
+- **Triage panel.** The final answer card comes first: the follow-up when there is one. Earlier notes sit collapsed below it, each labelled with its own answer and time. This is the answer a responder acts on, and it now sits right under the badge.
+- **No gap at the start of the week.** The export now keeps the 12 h of quiet-world history before the stream for the shown series. A dotted "stream starts" line marks the boundary. I exported the history rather than starting the axis at the stream start, because that history is what the engine had: it is the baseline the first alerts were measured against. History is before every clock, so the no-future rule is unchanged. A test checks the first window is complete.
+- **Keyboard.** Space plays and pauses, N goes to the next page, R toggles the answer key. A small hint sits by the slider. The keys do nothing while you type in a field or hold a modifier. Space is taken over on a focused button, so it doesn't also click that button.
+
+**Checks.** `dashboard/e2e/check.mjs` is the comparison script cut down to the one page. It adds four checks:
+- the first card's answer equals the headline badge;
+- the chart line starts at the window's left edge, and the "stream starts" label appears exactly when the stream start is in the window;
+- the keyboard works;
+- after a page switch, nothing is left expanded.
+
+I broke the page twice to see two of these fail. With the first note on top, the first-card check failed. With the history dropped, the line started 809 px in. All checks pass; play-through 401 ms/tick ([docs/dashboard/](dashboard/README.md)).
+
+**Main now has** `dashboard/index.html`, `app.js` and `shared/`, plus the data side (`data.py`, `export_demo.py`, `export_ui.py`). It also has the committed one-file build `dashboard/dist/sentinel-lens-week2.html` (2.6 MiB); a test fails if it is out of date. Removed from main:
+- variants A and C;
+- the v1 Streamlit app;
+- `requirements-dashboard.txt` and the Streamlit tests.
+
+The demo no longer needs `.venv-dashboard`. `docs/dashboard-compare/` stays, with a line naming B as chosen and why.
+
+Tests: `pytest` (default, `.venv`) 471 passed, in 82 s. `pytest -m ui` (the browser checks) 1 passed in 99 s.

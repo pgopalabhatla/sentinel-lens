@@ -364,30 +364,37 @@ alerts and page events, also when the consumer is killed three times on the way.
 
 ## Run the demo
 
-A Streamlit replay of live week 2 ([result](docs/results/live-week-2.md)). It needs no broker, no
-generated world and no API key: it reads the small export committed in `dashboard/demo/live-week-2/`
-(1.8 MB). Use a separate virtual environment. Streamlit requires pandas < 3, and the project's `.venv`
-runs on pandas 3.1.
+A replay of live week 2 ([result](docs/results/live-week-2.md)) in one static web page. It needs no
+broker, no generated world, no API key, no build step and no Python packages. It reads the export
+committed in `dashboard/demo/live-week-2/`. Any static web server will do:
 
 ```bash
-python3 -m venv .venv-dashboard
-.venv-dashboard/bin/pip install -r requirements.txt -r requirements-dashboard.txt
-.venv-dashboard/bin/streamlit run dashboard/app.py          # opens http://localhost:8501
+cd dashboard && python3 -m http.server 8600 --bind 127.0.0.1    # open http://127.0.0.1:8600/
 ```
 
-Move the clock with the slider, press ▶ Play (5 min, 15 min or 1 h of simulated time per tick), or jump
-with ⏭ Next page-out. The panels:
+Or open the single file `dashboard/dist/sentinel-lens-week2.html` (2.6 MB, committed) directly in a browser.
+It holds the page and the data. ECharts and the fonts load from their CDNs. Rebuild it with
+`python dashboard/make_single.py` after changing the page or the data. A test fails if the committed file
+is out of date.
 
-- **Pages as they fire**: every page-out up to the clock, with its first alert, how many alerts its
-  page holds now, and the triage agent's current answer.
-- **Triage note** for the selected page (triage run 1 of 3): needs_human, cause, impact, evidence and
-  next step. The follow-up appears 10 minutes later, when there was one. Each note appears only once
-  the agent had written it.
-- **Series**: one series of the selected page, as 5-minute means. For a seasonal series the chart also
-  shows its expected value, a ± wobble band, the hot line (expected + 6 × wobble) and the page's alerts.
-- **Active injections**, labelled *attacker view: hidden from the system*. This panel reads the answer
-  key, which nothing in the system sees. Its expander shows the whole week, including the future of the
-  clock. Every other panel shows only what existed at the clock (`dashboard/data.py`).
+Move the clock with the slider, press Play (5 min, 15 min, 1 h or 6 h of simulated time per tick), or jump
+to the next page-out. The keys are space for play/pause, N for next page and R for the answer key. Every view is a link: `?t=2026-10-30T00:30Z&page=14&reveal=1`.
+
+- **Pages, newest first**: every page-out up to the clock, each with a one-line reason
+  ("trino-worker-0 CPU 6.3x expected") and the triage agent's current answer.
+- **The selected page**: the reason, the answer as a badge (needs human: yes / unsure / no), and then the
+  triage agent's final answer card (run 1 of 3). That card is the follow-up when there was one. It gives
+  cause, impact, evidence (collapsed) and next step. The earlier note sits collapsed below it, labelled
+  with its own answer and time. Each note appears only once the agent had written it.
+- **The chart**: one series of the page, as 5-minute means over the last 12 h. For a seasonal series it
+  also shows the expected value, a +/- wobble band and the hot line (expected + 6 x wobble). Markers show
+  the page's alerts, the page-out, and changes (deploys and the like, from when they were streamed). The
+  x axis is in UTC. On the first day, the window reaches back before the stream into the quiet-world
+  history the engine had, and a dotted line marks where the stream starts.
+- **Reveal answer key** (off by default): the attacker's injections, labelled *hidden from the system*,
+  and shading on the chart. It is the one view that shows the future of the clock. Everything else
+  shows only what existed at the clock: `ui_state(t)` in `dashboard/data.py`, ported to
+  `dashboard/shared/visibility.js`.
 
 The expected and wobble values are recomputed with the frozen detector settings, because the engine does
 not publish them. The export compares them with the numbers printed in all 705 of the engine's seasonal
@@ -395,19 +402,29 @@ alert texts, and they agree to the print rounding. To rebuild the export (needs 
 `live-week-2-*` topics and `data_live_2/`):
 
 ```bash
-python scripts/posthoc/lw2_export_topics.py && python dashboard/export_demo.py
+python scripts/posthoc/lw2_export_topics.py && python dashboard/export_demo.py && python dashboard/export_ui.py
+python dashboard/make_single.py
 ```
 
-`tests/test_dashboard.py` checks that nothing from after the clock leaks into the system's panels,
-that the page-outs equal the live scorer's, and that every panel renders. The render part needs
-Streamlit, so it is skipped in `.venv`. Run it with
-`PYTHONPATH=. .venv-dashboard/bin/python -m pytest tests/test_dashboard.py` (after
-`.venv-dashboard/bin/pip install pytest`).
+Tests:
+- `tests/test_dashboard.py`: nothing from after the clock leaks, and the page-outs equal the live scorer's.
+- `tests/test_dashboard_ui.py`: the JS port gives exactly what `data.py` gives at the same clocks.
+- `tests/test_dashboard_page.py`: the single file is current.
+- `pytest -m ui` runs the browser checks in `dashboard/e2e/check.mjs`. Setup: `npm install` and
+  `npx playwright install chromium` in `dashboard/e2e`. They check:
+  - no future data;
+  - the first card's answer equals the badge;
+  - UTC axis labels, with the markers where the labels put them, and no gap at the start of the line;
+  - page 14, then page 17 (no stale text);
+  - no truncation;
+  - the keyboard;
+  - a full play-through.
 
-Branch `dashboard-v2` adds three restyled variants of this dashboard, built from one design spec and one
-export: Streamlit, a static HTML/JS page, and React + Vite. One Playwright script tests all three.
-Screenshots, check results, size and how to run each:
-[docs/dashboard-compare/README.md](docs/dashboard-compare/README.md).
+  Results and screenshots: [docs/dashboard/](docs/dashboard/).
+
+This page was chosen from three builds made from one spec: Streamlit, this page, and React + Vite.
+Comparison: [docs/dashboard-compare/README.md](docs/dashboard-compare/README.md). The other two are on
+branch `dashboard-v2`.
 
 ### Inject a failure
 
