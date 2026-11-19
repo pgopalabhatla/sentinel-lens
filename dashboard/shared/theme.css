@@ -1,8 +1,9 @@
 /* Sentinel Lens dashboard: one design spec for every variant (docs/dashboard-compare/README.md).
    An on-call ops console: warm charcoal, a faint chart grid, amber as the one accent (needs a human),
-   muted teal for healthy, grey for unsure. IBM Plex Mono for numbers and labels, Big Shoulders Display
-   for headings. One motion: a new page card slides in when it fires. */
-@import url("https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap");
+   muted teal for healthy, grey for unsure. IBM Plex Mono for numbers, times, labels and badges; IBM Plex
+   Sans for sentences (cause, impact, next step, evidence); Big Shoulders Display for headings. One motion:
+   a new page card slides in when it fires. */
+@import url("https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500&display=swap");
 
 :root {
   --bg: #1a1814;
@@ -30,6 +31,9 @@
   --chart-change: #6fa59a;
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --font-head: "Big Shoulders Display", "IBM Plex Mono", ui-monospace, monospace;
+  --font-text: "IBM Plex Sans", "Helvetica Neue", "Segoe UI", sans-serif;
+  --fs-head: 40px;
+  --thumb: 14px;
   --fs-xs: 11px;
   --fs-s: 13px;
   --fs-m: 15px;
@@ -75,15 +79,18 @@
 .sl-count { margin-left: auto; text-align: right; }
 .sl-count b { display: block; font-family: var(--font-head); font-weight: 800; font-size: var(--fs-xxl); line-height: 0.9; color: var(--amber); }
 .sl-count span { font-size: var(--fs-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em; }
-.sl-scrub { width: 100%; accent-color: var(--amber); }
-.sl-scrubrow { padding: 6px 24px 0; }
+
 
 /* ---------- layout */
-/* timeline and detail scroll on their own, so the chart stays in the first screen */
-.sl-main { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 0; border-bottom: 1px solid var(--line);
-  height: max(360px, calc(100vh - 490px)); }
-.sl-timeline { border-right: 1px solid var(--line); padding: 16px; overflow-y: auto; min-height: 0; }
-.sl-detail { padding: 20px 28px; min-width: 0; overflow-y: auto; min-height: 0; }
+/* the page scrolls naturally: nothing has a fixed height, so no note or chart is clipped or covered. The
+   timeline sticks to the top with its own visible scrollbar; the selected page and its chart follow. */
+.sl-main { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 0; border-bottom: 1px solid var(--line); align-items: start; }
+.sl-timeline { border-right: 1px solid var(--line); padding: 16px; position: sticky; top: 0; max-height: 100vh; overflow-y: auto;
+  scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.sl-timeline::-webkit-scrollbar { width: 8px; }
+.sl-timeline::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+.sl-right { min-width: 0; }
+.sl-detail { padding: 20px 28px 8px; min-width: 0; }
 .sl-eyebrow { font-size: var(--fs-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.1em; margin: 0 0 8px; }
 .sl-empty { color: var(--text-faint); font-size: var(--fs-s); padding: 12px 0; }
 
@@ -113,7 +120,7 @@
   text-transform: uppercase; letter-spacing: 0.05em; border: 2px solid; margin: 10px 0 18px; }
 
 /* ---------- selected page */
-.sl-headline { font-family: var(--font-head); font-weight: 800; font-size: var(--fs-xxl); line-height: 0.98;
+.sl-headline { font-family: var(--font-head); font-weight: 800; font-size: var(--fs-head); line-height: 1;
   margin: 0; letter-spacing: 0.005em; overflow-wrap: anywhere; }
 .sl-note { background: var(--bg-raise); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
 .sl-note h3 { font-family: var(--font-head); font-weight: 600; font-size: var(--fs-l); margin: 0 0 10px; letter-spacing: 0.02em; }
@@ -121,7 +128,14 @@
 .sl-field { margin: 0 0 10px; }
 .sl-field > b { display: block; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); font-weight: 500; }
 .sl-field > p { margin: 2px 0 0; white-space: normal; overflow-wrap: anywhere; }
-.sl-field .sl-tag { color: var(--text-dim); }
+.sl-tag { display: inline-block; margin-left: 8px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 2px;
+  color: var(--text-dim); font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: lowercase; }
+/* sentences in a proportional face; numbers, times, labels and badges stay monospace */
+.sl-prose { font-family: var(--font-text); font-size: 15.5px; line-height: 1.55; letter-spacing: 0; }
+.sl-evidence li .sl-prose { font-size: 14.5px; }
+.sl-status { margin: 8px 0 0; font-size: var(--fs-s); color: var(--teal); letter-spacing: 0.04em; }
+.sl-status.is-firing { color: var(--amber); }
+.sl-status.is-firing::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); margin-right: 8px; }
 .sl-evidence summary { cursor: pointer; font-size: var(--fs-s); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
 .sl-evidence ul { margin: 8px 0 0; padding-left: 0; list-style: none; }
 .sl-evidence li { padding: 6px 0; border-top: 1px solid var(--line); font-size: var(--fs-s); overflow-wrap: anywhere; }
@@ -130,16 +144,19 @@
 .sl-advisory { color: var(--text-faint); font-size: var(--fs-xs); }
 
 /* ---------- chart */
-.sl-chartwrap { padding: 16px 24px 8px; }
+.sl-chartwrap { padding: 8px 28px 16px; }
 .sl-chart-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
 .sl-chart-head h2 { font-family: var(--font-head); font-weight: 600; font-size: var(--fs-l); margin: 0; }
 .sl-chart { height: 300px; width: 100%; }
-.sl-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-dim); padding: 6px 0 4px; }
+.sl-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-dim); padding: 6px 0 4px; }
 .sl-legend i { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin-right: 6px; border-top: 2px solid; }
 .sl-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .sl-chip { background: transparent; color: var(--text-dim); border: 1px solid var(--line-strong); border-radius: 2px;
   padding: 3px 8px; font-size: var(--fs-xs); cursor: pointer; }
 .sl-chip.is-on { color: var(--text); border-color: var(--amber); }
+.sl-chip .sl-chip-n { margin-left: 6px; color: var(--text-faint); }
+.sl-chip.is-firing::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); margin-right: 6px; vertical-align: 1px; }
+.sl-chip-more { border-style: dashed; }
 
 /* ---------- answer key (hidden from the system) */
 .sl-key { margin: 8px 24px 24px; border: 1px dashed var(--key); border-radius: var(--radius); padding: 14px 18px; background: var(--key-soft); }
@@ -161,6 +178,21 @@
 .sl-earlier > summary .sl-pill { margin: 0 4px; }
 .sl-earlier[open] > summary { margin-bottom: 10px; }
 .sl-earlier .sl-note { margin-bottom: 0; background: transparent; border: 0; padding: 0; }
-.sl-scrubrow { display: flex; align-items: center; gap: 16px; }
-.sl-scrubrow .sl-scrub { flex: 1; min-width: 0; }
+.sl-scrubrow { display: flex; align-items: center; gap: 16px; padding: 10px 24px 6px; }
 .sl-scrubrow .sl-keys { white-space: nowrap; }
+/* the time slider: a track with a tick where each page fired (by the clock) and, answer key on, the
+   injection windows shaded. Positions use the same thumb-adjusted scale as the range input. */
+.sl-track { position: relative; flex: 1; min-width: 0; height: 22px; }
+.sl-track .sl-scrub { position: absolute; inset: 0; width: 100%; margin: 0; height: 22px; background: transparent;
+  -webkit-appearance: none; appearance: none; }
+.sl-scrub::-webkit-slider-runnable-track { height: 4px; background: var(--line-strong); border-radius: 2px; }
+.sl-scrub::-moz-range-track { height: 4px; background: var(--line-strong); border-radius: 2px; }
+.sl-scrub::-webkit-slider-thumb { -webkit-appearance: none; width: var(--thumb); height: var(--thumb); margin-top: -5px;
+  border-radius: 50%; background: var(--amber); border: 2px solid var(--bg-sunk); position: relative; z-index: 2; }
+.sl-scrub::-moz-range-thumb { width: var(--thumb); height: var(--thumb); border-radius: 50%; background: var(--amber); border: 2px solid var(--bg-sunk); }
+.sl-track-shade, .sl-track-ticks { position: absolute; inset: 0; pointer-events: none; }
+.sl-shade { position: absolute; top: 5px; height: 12px; background: var(--key-soft); border: 1px dashed var(--key); border-radius: 2px; }
+.sl-tick { position: absolute; top: 0; width: 10px; height: 22px; margin-left: -5px; padding: 0; border: 0; background: transparent;
+  cursor: pointer; pointer-events: auto; z-index: 1; }
+.sl-tick::before { content: ""; position: absolute; left: 4px; top: 3px; width: 2px; height: 16px; background: var(--amber); opacity: 0.85; }
+.sl-tick:hover::before, .sl-tick:focus-visible::before { opacity: 1; width: 3px; }

@@ -30,7 +30,7 @@ def build() -> str:
     ui = DASH / "demo" / "live-week-2" / "ui"
     data = {"demo": json.loads((ui / "demo.json").read_text()), "series": json.loads((ui / "series.json").read_text())}
     blob = json.dumps(data, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
-    code = "\n".join(module(p) for p in (DASH / "shared" / "format.js", DASH / "shared" / "visibility.js", HERE / "app.js"))
+    code = "\n".join(module(p) for p in (DASH / "shared" / "format.js", DASH / "shared" / "visibility.js", DASH / "shared" / "view.js", HERE / "app.js"))
     page = page.replace('<link rel="stylesheet" href="shared/theme.css">', f"<style>\n{css}\n</style>")
     page = page.replace('<script type="module" src="app.js"></script>',
                         f'<script type="application/json" id="demo-data">{blob}</script>\n<script type="module">\n{code}\n</script>')
