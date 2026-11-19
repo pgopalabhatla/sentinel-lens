@@ -155,13 +155,13 @@ still holds the placeholder. A prediction is a single number (or a share) and a 
 
 | | prediction | reasoning |
 |---|---|---|
-| injections detected, overall (share) | NOT FILLED IN | NOT FILLED IN |
-| injections detected, generic (share) | NOT FILLED IN | NOT FILLED IN |
-| injections detected, subtle (share) | NOT FILLED IN | NOT FILLED IN |
-| false pages per day | NOT FILLED IN | NOT FILLED IN |
-| dangerous final answers, summed over the 3 runs | NOT FILLED IN | NOT FILLED IN |
-| share of true pages with a correct final answer (mean of the 3 runs) | NOT FILLED IN | NOT FILLED IN |
-| total cost, USD (campaign + 3 triage runs) | NOT FILLED IN | NOT FILLED IN |
+| injections detected, overall (share) | 0.65 (range 0.55-0.75) | Lower than live week 1's 12/14 because the attacker chooses the incidents, about half are generic, and some are subtle. |
+| injections detected, generic (share) | 0.65 (range 0.60-0.70) | The detector was never designed around these; I expect it to catch ones that move memory, latency or lag strongly. I know this range is narrow for a small number of incidents. |
+| injections detected, subtle (share) | 0.42 (range 0.30-0.55) | Subtle usually means small or slow effects, and slow leaks are my known weak spot: both Flink state leaks were missed in live week 1. |
+| false pages per day | 0.9 (range 0.4-1.4) | Quiet week 1 was 0.57 and the live test week 1.57; seed 13 is fresh noise the detector was never tuned on, so it could move either way. |
+| dangerous final answers, summed over the 3 runs | 1 (range 0-3) | The dev set ended at 0 with the guard, but that was tuned data, and answers varied between runs. |
+| share of true pages with a correct final answer (mean of the 3 runs) | 0.70 (range 0.60-0.80) | Dev arm E was 23/25, but it was tuned there, and generic injections carry no logs, events or changes, so the agent has less evidence. |
+| total cost, USD (campaign + 3 triage runs) | $9.50 (range $8-11) | Attacker about $2.50 for 7 days plus about $1.50 per triage run times 3; more pages than week 1 would push it up. |
 
 ## What will be reported
 
