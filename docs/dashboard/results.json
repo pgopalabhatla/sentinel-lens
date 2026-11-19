@@ -1,14 +1,14 @@
 {
  "target": "dashboard (static HTML + ECharts)",
  "browser_timezone": "America/Los_Angeles",
- "at": "2026-11-19T21:49:47.765Z",
+ "at": "2026-11-19T22:35:41.918Z",
  "first_render": {
   "runs_ms": [
-   1296,
-   1303,
-   1137
+   1349,
+   1419,
+   1353
   ],
-  "median_ms": 1296
+  "median_ms": 1353
  },
  "clocks": [
   {
@@ -20,33 +20,28 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "17:00",
-     "18:00",
-     "19:00",
-     "20:00",
-     "21:00",
-     "22:00",
-     "23:00",
-     "01:00",
+     "01:30",
+     "02:30",
+     "03:30",
+     "04:30",
      "02:00",
      "03:00",
-     "04:00",
-     "00:00"
+     "04:00"
     ],
     "fit": {
-     "labels": 12,
+     "labels": 7,
      "maxResidualPx": 0
     },
     "markers": {
      "alert": {
       "expected": 4,
       "drawn": 4,
-      "worstOffsetPx": 0.49
+      "worstOffsetPx": 0.74
      },
      "page_mark": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.26
+      "worstOffsetPx": 0.09
      },
      "change": {
       "expected": 0,
@@ -54,7 +49,8 @@
       "worstOffsetPx": null
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   },
   {
@@ -66,41 +62,37 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "02:00",
-     "03:00",
-     "04:00",
-     "05:00",
-     "06:00",
-     "07:00",
-     "08:00",
-     "09:00",
-     "10:00",
+     "10:30",
+     "11:30",
+     "12:30",
+     "13:30",
      "11:00",
      "12:00",
      "13:00"
     ],
     "fit": {
-     "labels": 12,
+     "labels": 7,
      "maxResidualPx": 0
     },
     "markers": {
      "alert": {
       "expected": 4,
       "drawn": 4,
-      "worstOffsetPx": 0.49
+      "worstOffsetPx": 0.74
      },
      "page_mark": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.26
+      "worstOffsetPx": 0.09
      },
      "change": {
-      "expected": 1,
-      "drawn": 1,
-      "worstOffsetPx": 0.22
+      "expected": 0,
+      "drawn": 0,
+      "worstOffsetPx": null
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   },
   {
@@ -112,41 +104,34 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "13:00",
-     "14:00",
-     "15:00",
-     "16:00",
-     "17:00",
-     "18:00",
-     "19:00",
-     "20:00",
      "21:00",
      "22:00",
      "23:00",
      "00:00"
     ],
     "fit": {
-     "labels": 12,
+     "labels": 4,
      "maxResidualPx": 0
     },
     "markers": {
      "alert": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.44
+      "worstOffsetPx": 0.1
      },
      "page_mark": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.44
+      "worstOffsetPx": 0.1
      },
      "change": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.06
+      "worstOffsetPx": 0.6
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   },
   {
@@ -158,41 +143,37 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "13:00",
-     "14:00",
-     "15:00",
-     "16:00",
-     "17:00",
-     "18:00",
-     "19:00",
-     "20:00",
-     "21:00",
+     "21:30",
+     "22:30",
+     "23:30",
+     "00:30",
      "22:00",
      "23:00",
      "00:00"
     ],
     "fit": {
-     "labels": 12,
+     "labels": 7,
      "maxResidualPx": 0
     },
     "markers": {
      "alert": {
       "expected": 5,
       "drawn": 5,
-      "worstOffsetPx": 0.5
+      "worstOffsetPx": 0.65
      },
      "page_mark": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.44
+      "worstOffsetPx": 0.1
      },
      "change": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.06
+      "worstOffsetPx": 0.6
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   },
   {
@@ -204,34 +185,25 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "13:00",
-     "14:00",
-     "15:00",
-     "16:00",
-     "17:00",
-     "18:00",
-     "19:00",
-     "20:00",
-     "21:00",
      "22:00",
      "23:00",
      "01:00",
      "00:00"
     ],
     "fit": {
-     "labels": 13,
+     "labels": 4,
      "maxResidualPx": 0
     },
     "markers": {
      "alert": {
       "expected": 9,
       "drawn": 9,
-      "worstOffsetPx": 0.49
+      "worstOffsetPx": 0.45
      },
      "page_mark": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.19
+      "worstOffsetPx": 0.29
      },
      "change": {
       "expected": 0,
@@ -239,7 +211,8 @@
       "worstOffsetPx": null
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   },
   {
@@ -251,34 +224,25 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "13:00",
-     "14:00",
-     "15:00",
-     "16:00",
-     "17:00",
-     "18:00",
-     "19:00",
-     "20:00",
-     "21:00",
      "22:00",
      "23:00",
      "01:00",
      "00:00"
     ],
     "fit": {
-     "labels": 13,
+     "labels": 4,
      "maxResidualPx": 0
     },
     "markers": {
      "alert": {
       "expected": 9,
       "drawn": 9,
-      "worstOffsetPx": 0.49
+      "worstOffsetPx": 0.45
      },
      "page_mark": {
       "expected": 1,
       "drawn": 1,
-      "worstOffsetPx": 0.19
+      "worstOffsetPx": 0.29
      },
      "change": {
       "expected": 0,
@@ -286,7 +250,8 @@
       "worstOffsetPx": null
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   },
   {
@@ -303,21 +268,18 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "13:00",
-     "14:00",
-     "15:00",
-     "16:00",
-     "17:00",
-     "18:00",
-     "19:00",
-     "20:00",
-     "21:00",
+     "21:20",
+     "21:40",
+     "22:20",
+     "22:40",
+     "23:20",
+     "23:40",
      "22:00",
      "23:00",
      "00:00"
     ],
     "fit": {
-     "labels": 12,
+     "labels": 9,
      "maxResidualPx": 0
     },
     "markers": {
@@ -337,7 +299,8 @@
       "worstOffsetPx": null
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   },
   {
@@ -349,33 +312,26 @@
     "ok": true,
     "problems": [],
     "labels": [
-     "12:00",
-     "13:00",
-     "14:00",
-     "15:00",
-     "16:00",
-     "17:00",
-     "18:00",
-     "19:00",
-     "20:00",
-     "21:00",
      "22:00",
-     "23:00"
+     "23:00",
+     "01:00",
+     "02:00",
+     "00:00"
     ],
     "fit": {
-     "labels": 12,
+     "labels": 5,
      "maxResidualPx": 0
     },
     "markers": {
      "alert": {
-      "expected": 0,
-      "drawn": 0,
-      "worstOffsetPx": null
+      "expected": 17,
+      "drawn": 17,
+      "worstOffsetPx": 0.75
      },
      "page_mark": {
-      "expected": 0,
-      "drawn": 0,
-      "worstOffsetPx": null
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0.1
      },
      "change": {
       "expected": 0,
@@ -383,7 +339,8 @@
       "worstOffsetPx": null
      }
     },
-    "lineStartOffsetPx": 0
+    "lineStartOffsetPx": 0,
+    "pageInRange": true
    }
   }
  ],
@@ -412,6 +369,31 @@
   "problems": [],
   "hint": "space play/pause N next page R answer key"
  },
+ "window_all_pages": {
+  "ok": true,
+  "problems": [],
+  "checked": 29
+ },
+ "layout": [
+  {
+   "viewport": "1440x900",
+   "ok": true,
+   "problems": []
+  },
+  {
+   "viewport": "1280x800",
+   "ok": true,
+   "problems": []
+  }
+ ],
+ "slider": {
+  "ok": true,
+  "problems": []
+ },
+ "page_view": {
+  "ok": true,
+  "problems": []
+ },
  "screenshots": [
   "2026-10-26T0430Z_1440x900.png",
   "2026-10-28T1340Z_1440x900.png",
@@ -427,9 +409,9 @@
  ],
  "play_through": {
   "simulated_hours": 168,
-  "wall_ms": 67313,
+  "wall_ms": 67251,
   "ideal_ms": 67200,
-  "ms_per_tick": 401,
+  "ms_per_tick": 400,
   "final_page_count": 13,
   "count_monotonic": true,
   "ok": true
@@ -442,6 +424,10 @@
   "no_truncation": true,
   "answer_key_labelled": true,
   "keyboard": true,
+  "chart_window_holds_every_page": true,
+  "layout_nothing_clipped": true,
+  "slider_ticks_and_shading": true,
+  "status_chips_cause_type_legend": true,
   "play_through": true,
   "all_clock_checks": true
  }
