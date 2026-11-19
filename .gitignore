@@ -13,3 +13,7 @@ data_live/
 data_live_2/
 # triage agent transcripts (sentinel_stream/investigator.py)
 runs/
+# dashboard variants: node packages, Vite build, the single-page build of variant B
+node_modules/
+dashboard/c_react/dist/
+dashboard/b_static/dist/
