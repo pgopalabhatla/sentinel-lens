@@ -1,4 +1,6 @@
 .venv/
+# the demo dashboard's own venv: Streamlit pins pandas<3, so it must not share .venv (pandas 3.1)
+.venv-dashboard/
 __pycache__/
 .pytest_cache/
 *.pyc
