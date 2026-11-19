@@ -25,7 +25,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { uiState, attackerView } from "../shared/visibility.js";
-import { verdictText } from "../shared/format.js";
+import { verdictText, hhmm } from "../shared/format.js";
+import { chartWindow, rankSeries, pageStatus } from "../shared/view.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DASH = resolve(HERE, "..");
@@ -33,7 +34,7 @@ const ROOT = resolve(DASH, "..");
 const OUT = join(ROOT, "docs", "dashboard");
 const UI = join(DASH, "demo", "live-week-2", "ui");
 const demo = JSON.parse(readFileSync(join(UI, "demo.json"), "utf8"));
-const H = 3600e3, LOOKBACK = demo.settings.lookback_hours;
+const H = 3600e3, BUCKET = demo.meta.bucket_ms;
 
 export const CLOCKS = ["2026-10-26T04:30Z", "2026-10-28T13:40Z", "2026-10-29T00:20Z", "2026-10-30T00:30Z", "2026-11-01T01:00Z"];
 export const VIEWPORTS = [[1440, 900], [1280, 800]];
@@ -85,17 +86,18 @@ async function open(v, ctx, q) {
   return { page, errors, loadMs: Date.now() - t0, ref };
 }
 
-// what the selected page's chart should show at t (from the reference view)
+// what the selected page's chart should show at t (from the reference view): the window anchored on the
+// page (shared/view.js chartWindow), the paging (headline) series unless one was chosen
 function expectedChart(ref, t, pageNo, sid) {
   const p = pageNo != null ? ref.pages.find((x) => x.page === pageNo) : ref.pages[0];
   if (!p) return null;
-  const s = sid && p.series.includes(sid) ? sid : p.series.includes(p.paging_target) ? p.paging_target : p.series[0];
-  const from = t - LOOKBACK * H;
+  const s = sid && p.series.includes(sid) ? sid : rankSeries(p, t)[0].sid;
+  const { from, to, nowInside } = chartWindow(p, t);
   return {
-    page: p, sid: s, from,
-    alert: p.alerts.filter((a) => a.target === s && a.time >= from).map((a) => a.time),
-    page_mark: p.paged_at >= from ? [p.paged_at] : [],
-    change: ref.changes.filter((c) => c.ts_ms >= from).map((c) => c.ts_ms),
+    page: p, sid: s, from, to, nowInside,
+    alert: p.alerts.filter((a) => a.target === s && a.time >= from && a.time <= to).map((a) => a.time),
+    page_mark: [p.paged_at],
+    change: ref.changes.filter((c) => c.ts_ms >= from && c.ts_ms <= to).map((c) => c.ts_ms),
   };
 }
 
@@ -158,7 +160,7 @@ function checkChart(drawn, exp, t, tolPx = 3) {
   if (!drawn) { fail("no chart svg"); return out; }
   const bad = drawn.xLabels.filter((l) => !/^\d{2}:\d{2}$/.test(l.text));
   if (bad.length) fail(`x labels not 24 h HH:MM: ${bad.map((l) => l.text).join(", ")}`);
-  const fit = fitAxis(drawn.xLabels, exp.from, t);
+  const fit = fitAxis(drawn.xLabels, exp.from, exp.to);
   out.labels = drawn.xLabels.map((l) => l.text);
   if (!fit) { fail("fewer than 2 x labels readable as UTC times inside the window"); return out; }
   out.fit = { labels: fit.n, maxResidualPx: +fit.maxResidualPx.toFixed(2) };
@@ -172,10 +174,16 @@ function checkChart(drawn, exp, t, tolPx = 3) {
     if (offsets.some((o) => !(o <= tolPx))) fail(`${kind}: a marker is ${Math.max(...offsets).toFixed(1)} px from where the labels put its time`);
   }
   // no gap: the line starts at the window's left edge (at the start of the week: the quiet-world history)
-  out.lineStartOffsetPx = drawn.lineLeft == null ? null : +Math.abs(drawn.lineLeft - fit.at(exp.from)).toFixed(2);
+  const firstPoint = Math.ceil(exp.from / BUCKET) * BUCKET;          // the first 5-minute reading inside the window
+  out.lineStartOffsetPx = drawn.lineLeft == null ? null : +Math.abs(drawn.lineLeft - fit.at(firstPoint)).toFixed(2);
   if (!(out.lineStartOffsetPx <= tolPx)) fail(`the line starts ${out.lineStartOffsetPx} px from the window's left edge`);
-  const streamInWindow = demo.meta.start_ms > exp.from;
+  const streamInWindow = demo.meta.start_ms > exp.from && demo.meta.start_ms <= exp.to;
   if (streamInWindow !== drawn.allText.includes("stream starts")) fail(`"stream starts" marker ${streamInWindow ? "missing" : "shown outside the window"}`);
+  if (exp.nowInside !== drawn.allText.includes("now")) fail(`"now" line ${exp.nowInside ? "missing" : "shown though the clock is past the window"}`);
+  // the paging time is inside the drawn x-range, at the place the labels give it
+  out.pageInRange = exp.page.paged_at >= exp.from && exp.page.paged_at <= exp.to && drawn.marks.some((m) => m.kind === "page_mark")
+    && drawn.marks.filter((m) => m.kind === "page_mark").every((m) => m.x >= drawn.box.left && m.x <= drawn.box.right);
+  if (!out.pageInRange) fail("the page's own time is not inside the chart's visible x-range");
   return out;
 }
 
@@ -408,7 +416,7 @@ async function screenshots(v, browser, dir) {
     for (const clock of CLOCKS) {
       const { page } = await open(v, ctx, { t: clock });
       const f = `${clock.replace(/[:]/g, "")}_${w}x${h}.png`;
-      await page.screenshot({ path: join(dir, f) });
+      await page.screenshot({ path: join(dir, f), fullPage: true });
       files.push(f);
       await page.close();
     }
@@ -424,6 +432,182 @@ async function screenshots(v, browser, dir) {
     await ctx.close();
   }
   return files;
+}
+
+// every page, selected in turn: its paging time is inside the chart's visible x-range, and the window is the
+// page's own (paged_at - 3 h to paged_at + 2 h, capped at the clock)
+async function checkAllPagesInWindow(v, ctx, clocks) {
+  const r = { ok: true, problems: [], checked: 0 };
+  for (const clock of clocks) {
+    const t = ms(clock);
+    const { page, ref } = await open(v, ctx, { t: clock });
+    for (const p of ref.pages) {
+      await page.click(v.cardClick(p.page)); await settle(v, page, true);
+      const exp = expectedChart(ref, t, p.page, null);
+      const dom = await page.evaluate((sel) => {
+        const el = document.querySelector(sel), on = document.querySelector('[data-testid="series-chip"].is-on');
+        return { from: Number(el.dataset.from), to: Number(el.dataset.to), chart: el.dataset.series,
+                 chip: on ? on.dataset.series : null, firstChip: document.querySelector('[data-testid="series-chip"]')?.dataset.series ?? null,
+                 headline: document.querySelector('[data-testid="reason-headline"]')?.textContent.trim() };
+      }, v.chartSeries);
+      // the selected series is the headline's: the alert that paged (from the export, not from view.js)
+      const headlineSeries = demo.paging_targets[String(p.page)];
+      if (dom.headline !== demo.paging_reasons[String(p.page)]) { r.ok = false; r.problems.push(`${clock} page ${p.page}: headline "${dom.headline}"`); }
+      if (dom.chart !== headlineSeries || (dom.chip !== null && (dom.chip !== headlineSeries || dom.firstChip !== headlineSeries))) {
+        r.ok = false; r.problems.push(`${clock} page ${p.page}: selected ${dom.chip ?? dom.chart}, first chip ${dom.firstChip}; the headline's series is ${headlineSeries}`);
+      }
+      r.headlineSeriesSelected = (r.headlineSeriesSelected || 0) + 1;
+      const c = checkChart(await readChart(page, v.chartSvg), exp, t);
+      r.checked++;
+      if (dom.from !== exp.from || dom.to !== exp.to) { r.ok = false; r.problems.push(`${clock} page ${p.page}: window ${dom.from}-${dom.to}, expected ${exp.from}-${exp.to}`); }
+      if (!c.ok) { r.ok = false; r.problems.push(`${clock} page ${p.page}: ${c.problems.join("; ")}`); }
+    }
+    await page.close();
+  }
+  return r;
+}
+
+// nothing clipped: the final note's last line can be scrolled into view, uncovered and not cut by any
+// ancestor; the page-out counter is fully on screen at the top; the legend is one line
+async function checkLayout(v, browser, w, hgt) {
+  const r = { viewport: `${w}x${hgt}`, ok: true, problems: [] };
+  const fail = (m) => { r.ok = false; r.problems.push(m); };
+  const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, timezoneId: TZ, reducedMotion: "reduce" });
+  for (const clock of [CLOCKS[1], CLOCKS[3], CLOCKS[4]]) {
+    const { page } = await open(v, ctx, { t: clock });
+    const counter = await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      const el = document.querySelector('[data-testid="page-counter"]'), b = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      return { inView: b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight, hit: !!hit && el.contains(hit) };
+    });
+    if (!counter.inView || !counter.hit) fail(`${clock}: page-out counter cut off or covered (${JSON.stringify(counter)})`);
+    const last = await page.evaluate(() => {
+      const el = [...document.querySelectorAll('[data-testid="page-detail"] > [data-testid="note"] [data-testid="next-step"] p')].pop();
+      if (!el) return { missing: true };
+      // scroll only what a reader can: containers with a scrollbar (overflow auto/scroll), then the page.
+      // Not scrollIntoView: it also scrolls overflow:hidden boxes, which a reader cannot.
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        const oy = getComputedStyle(a).overflowY;
+        if (oy === "auto" || oy === "scroll") a.scrollTop += el.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom + 4;
+      }
+      window.scrollBy(0, el.getBoundingClientRect().bottom - innerHeight + 8);
+      const b = el.getBoundingClientRect();
+      let clipped = null;
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        if (cs.overflowY !== "visible" || cs.overflowX !== "visible") {
+          const ab = a.getBoundingClientRect();
+          if (b.top < ab.top - 1 || b.bottom > ab.bottom + 1 || b.left < ab.left - 1 || b.right > ab.right + 1) clipped = a.className;
+        }
+      }
+      const hit = document.elementFromPoint(b.left + Math.min(20, b.width / 2), b.bottom - 4);
+      return { inView: b.top >= 0 && b.bottom <= innerHeight + 1, covered: !(hit && el.contains(hit)), clipped };
+    });
+    if (last.missing) fail(`${clock}: no final note`);
+    else if (!last.inView || last.covered || last.clipped) fail(`${clock}: the note's last line is not readable (${JSON.stringify(last)})`);
+    const legend = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="legend"]'), cs = getComputedStyle(el);
+      const lines = new Set([...el.children].map((c) => Math.round(c.getBoundingClientRect().top))).size;
+      return { lines, overflow: el.scrollWidth > el.clientWidth + 1 };
+    });
+    if (legend.lines > 1 || legend.overflow) fail(`${clock}: legend is ${legend.lines} lines${legend.overflow ? ", overflowing" : ""}`);
+    await page.close();
+  }
+  await ctx.close();
+  return r;
+}
+
+// slider: one tick per page fired by the clock (none later), at the right place, a click goes to that page;
+// answer key on: every injection shaded on the track, off: none
+async function checkSlider(v, ctx) {
+  const r = { ok: true, problems: [] };
+  const fail = (m) => { r.ok = false; r.problems.push(m); };
+  for (const clock of [CLOCKS[0], CLOCKS[3], "2026-11-02T00:00Z"]) {
+    const t = ms(clock);
+    const { page, ref } = await open(v, ctx, { t: clock });
+    const ticks = await page.evaluate(() => {
+      const track = document.querySelector('[data-testid="slider"]').getBoundingClientRect();
+      const thumb = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--thumb"));
+      return { track: { left: track.left, width: track.width }, thumb,
+        ticks: [...document.querySelectorAll('[data-testid="slider-tick"]')].map((e) => { const b = e.getBoundingClientRect(); return { page: Number(e.dataset.page), ms: Number(e.dataset.ms), x: b.left + b.width / 2 }; }),
+        shades: document.querySelectorAll('[data-testid="slider-injection"]').length };
+    });
+    const want = ref.pages.map((p) => [p.page, p.paged_at]).sort((a, b) => a[0] - b[0]);
+    const got = ticks.ticks.map((x) => [x.page, x.ms]).sort((a, b) => a[0] - b[0]);
+    if (JSON.stringify(got) !== JSON.stringify(want)) fail(`${clock}: ticks ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    if (ticks.ticks.some((x) => x.ms > t)) fail(`${clock}: a tick for a page after the clock`);
+    const scale = (m) => ticks.track.left + ticks.thumb / 2 + (ticks.track.width - ticks.thumb) * (m - demo.meta.start_ms) / (demo.meta.end_ms - demo.meta.start_ms);
+    const off = Math.max(0, ...ticks.ticks.map((x) => Math.abs(x.x - scale(x.ms))));
+    if (off > 2) fail(`${clock}: a tick is ${off.toFixed(1)} px from its time on the track`);
+    if (ticks.shades) fail(`${clock}: injections shaded with the answer key off`);
+    await page.close();
+  }
+  // click page 3's tick at the end of the week
+  const { page } = await open(v, ctx, { t: "2026-11-02T00:00Z" });
+  await page.click('[data-testid="slider-tick"][data-page="3"]'); await settle(v, page, true);
+  const after = await page.evaluate(() => ({ clock: Number(document.querySelector('[data-testid="clock"]').dataset.ms),
+    detail: Number(document.querySelector('[data-testid="page-detail"]').dataset.page) }));
+  const p3 = demo.page_records.find((x) => x.kind === "paged" && x.page === 3);
+  if (after.clock !== ms(p3.emitted_at) || after.detail !== 3) fail(`tick click: clock ${after.clock}, page ${after.detail}; expected page 3 at ${ms(p3.emitted_at)}`);
+  await page.close();
+  const { page: rev } = await open(v, ctx, { t: CLOCKS[0], reveal: "1" });
+  const shaded = await rev.evaluate(() => [...document.querySelectorAll('[data-testid="slider-injection"]')].map((e) => e.dataset.id));
+  const ids = attackerView(demo, ms(CLOCKS[0])).all.map((i) => i.id);
+  if (JSON.stringify(shaded) !== JSON.stringify(ids)) fail(`answer key on: shaded ${shaded}, expected ${ids}`);
+  await rev.close();
+  return r;
+}
+
+// the selected page: status line, series chips (paging series first and preselected, then strength order, firing marks, 5 + "+N
+// more"), the cause label, monospace vs proportional faces, headline size
+async function checkPageView(v, ctx, clocks) {
+  const r = { ok: true, problems: [] };
+  const fail = (m) => { r.ok = false; r.problems.push(m); };
+  for (const clock of clocks) {
+    const t = ms(clock);
+    const { page, ref } = await open(v, ctx, { t: clock });
+    const p = ref.pages[0];
+    if (!p) { await page.close(); continue; }
+    const st = pageStatus(p, t);
+    const wantStatus = st.firing ? "still firing" : `quiet since ${hhmm(st.lastAlertMs)} UTC`;
+    const ranked = rankSeries(p, t);
+    const dom = await page.evaluate(() => {
+      const q = (s) => document.querySelector(s);
+      const font = (s) => (q(s) ? getComputedStyle(q(s)).fontFamily : "");
+      return {
+        status: q('[data-testid="page-status"]')?.textContent.trim(),
+        chips: [...document.querySelectorAll('[data-testid="series-chip"]')].map((c) => ({ sid: c.dataset.series, firing: c.dataset.firing === "1", on: c.classList.contains("is-on") })),
+        more: q('[data-testid="chips-more"]')?.textContent.trim() ?? null,
+        causeLabels: [...document.querySelectorAll('[data-testid="page-detail"] [data-testid="cause-label"]')].map((b) => b.textContent.trim()),
+        fonts: { cause: font('[data-testid="cause"] p'), finding: font('[data-testid="evidence"] li .sl-prose'), verdict: font('[data-testid="verdict"]'),
+                 clock: font('[data-testid="clock"]'), causeLabel: font('[data-testid="cause-label"]') },
+        sansLoaded: document.fonts.check('15px "IBM Plex Sans"'),
+        headline: parseFloat(getComputedStyle(q('[data-testid="reason-headline"]')).fontSize),
+      };
+    });
+    if (dom.status !== wantStatus) fail(`${clock}: status "${dom.status}", expected "${wantStatus}"`);
+    if (ranked.length > 1) {
+      const shown = ranked.length > 5 ? ranked.slice(0, 5) : ranked;
+      if (JSON.stringify(dom.chips.map((c) => c.sid)) !== JSON.stringify(shown.map((x) => x.sid))) fail(`${clock}: chips not in strength order or not the top 5`);
+      if (!dom.chips[0]?.on || dom.chips[0].sid !== p.paging_target) fail(`${clock}: the paging series is not first and preselected`);
+      if (dom.chips.some((c, i) => c.firing !== shown[i]?.firing)) fail(`${clock}: firing marks do not match alerts in the last 10 min`);
+      const wantMore = ranked.length > 5 ? `+${ranked.length - 5} more` : null;
+      if (dom.more !== wantMore) fail(`${clock}: "${dom.more}", expected "${wantMore}"`);
+    }
+    const notes = ref.notes[String(p.page)].filter((n) => n.type !== "link").reverse();
+    const wantLabels = notes.map((n) => (!n.cause?.category || n.cause.category === "unknown" ? "Likely cause (unconfirmed)" : `Cause${n.cause.category}`));
+    if (JSON.stringify(dom.causeLabels) !== JSON.stringify(wantLabels)) fail(`${clock}: cause labels ${JSON.stringify(dom.causeLabels)}, expected ${JSON.stringify(wantLabels)}`);
+    if (notes.length) {
+      if (!/IBM Plex Sans/.test(dom.fonts.cause) || (dom.fonts.finding && !/IBM Plex Sans/.test(dom.fonts.finding))) fail(`${clock}: sentences not in the proportional face (${dom.fonts.cause})`);
+      if (!/IBM Plex Mono/.test(dom.fonts.verdict) || !/IBM Plex Mono/.test(dom.fonts.clock) || !/IBM Plex Mono/.test(dom.fonts.causeLabel)) fail(`${clock}: badge, clock or label not monospace`);
+      if (!dom.sansLoaded) fail(`${clock}: IBM Plex Sans did not load`);
+    }
+    if (/Inter|Roboto|Arial|Space Grotesk/.test(Object.values(dom.fonts).join(","))) fail(`${clock}: a banned face is in use`);
+    if (dom.headline !== 40) fail(`${clock}: headline ${dom.headline}px, expected 40`);
+    await page.close();
+  }
+  return r;
 }
 
 // ---------------------------------------------------------------- main
@@ -443,6 +627,10 @@ async function run() {
       if (only === "switch") res.page_switch_14_17 = await checkPageSwitch(v, ctx);
       if (only === "trunc") res.truncation = await checkTruncation(v, ctx, [CLOCKS[3]]);
       if (only === "keys") res.keyboard = await checkKeyboard(v, ctx);
+      if (only === "window") res.window_all_pages = await checkAllPagesInWindow(v, ctx, ["2026-10-26T04:30Z", "2026-11-02T00:00Z"]);
+      if (only === "layout") res.layout = [await checkLayout(v, browser, 1440, 900), await checkLayout(v, browser, 1280, 800)];
+      if (only === "slider") res.slider = await checkSlider(v, ctx);
+      if (only === "view") res.page_view = await checkPageView(v, ctx, [CLOCKS[0], CLOCKS[3]]);
       console.log(key, JSON.stringify(res, (k, x) => (k === "labels" ? undefined : x)).slice(0, 1500));
       await browser.close();
       return res;
@@ -454,6 +642,11 @@ async function run() {
     res.truncation = await checkTruncation(v, ctx, [CLOCKS[1], CLOCKS[3], CLOCKS[4]]);
     res.answer_key = await checkAnswerKey(v, ctx);
     res.keyboard = await checkKeyboard(v, ctx);
+    res.window_all_pages = await checkAllPagesInWindow(v, ctx, ["2026-10-26T04:30Z", "2026-11-01T00:19Z", "2026-11-02T00:00Z"]);
+    res.layout = [];
+    for (const [w, h] of VIEWPORTS) res.layout.push(await checkLayout(v, browser, w, h));
+    res.slider = await checkSlider(v, ctx);
+    res.page_view = await checkPageView(v, ctx, [...CLOCKS, "2026-10-26T00:15Z", "2026-11-02T00:00Z"]);
     res.screenshots = await screenshots(v, browser, dir);
     res.play_through = await playThrough(v, ctx);
     res.summary = {
@@ -464,13 +657,18 @@ async function run() {
       no_truncation: res.truncation.ok,
       answer_key_labelled: res.answer_key.ok,
       keyboard: res.keyboard.ok,
+      chart_window_holds_every_page: res.window_all_pages.ok,
+      layout_nothing_clipped: res.layout.every((l) => l.ok),
+      slider_ticks_and_shading: res.slider.ok,
+      status_chips_cause_type_legend: res.page_view.ok,
       play_through: res.play_through.ok,
       all_clock_checks: res.clocks.every((c) => c.ok),
     };
     writeFileSync(join(dir, "results.json"), JSON.stringify(res, null, 1));
     console.log(key, JSON.stringify(res.summary), `first render ${res.first_render.median_ms} ms`, `play-through ${res.play_through.wall_ms} ms`);
     for (const c of res.clocks) if (!c.ok) console.log("  ", c.clock, c.problems.join(" | "));
-    for (const k of ["page_switch_14_17", "truncation", "answer_key", "keyboard"]) if (!res[k].ok) console.log("  ", k, res[k].problems.join(" | "));
+    for (const l of res.layout) if (!l.ok) console.log("   layout", l.viewport, l.problems.join(" | "));
+    for (const k of ["page_switch_14_17", "truncation", "answer_key", "keyboard", "window_all_pages", "slider", "page_view"]) if (!res[k].ok) console.log("  ", k, res[k].problems.join(" | "));
     await browser.close();
     return res;
   } finally {

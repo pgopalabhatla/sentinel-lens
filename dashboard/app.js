@@ -4,9 +4,10 @@
 // docs/dashboard-compare/README.md.
 import { uiState, seriesPoints, attackerView, nextPageOut } from "./shared/visibility.js";
 import { hhmm, hhmmss, day, isoMinute, verdictText, verdictClass, speedLabel, readUrl, fmtNum } from "./shared/format.js";
+import { chartWindow, rankSeries, pageStatus, causeLabel, FIRING_MS } from "./shared/view.js";
 
 const DATA = "demo/live-week-2/ui/";
-const H = 3600e3;
+const CHIPS_SHOWN = 5;
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 async function loadData() {
@@ -18,7 +19,7 @@ async function loadData() {
 
 const { demo, series } = await loadData();
 const S = demo.settings, START = demo.meta.start_ms, END = demo.meta.end_ms;
-const state = { ...readUrl(location.search, START, END, S.default_speed_min), playing: false };
+const state = { ...readUrl(location.search, START, END, S.default_speed_min), playing: false, allChips: false };
 const openEvidence = new Set();
 let shownPages = null, timer = null, chart = null;
 
@@ -40,6 +41,8 @@ function play(on) {
   }, S.tick_ms);
   render();
 }
+// where a time sits on the slider track, as a CSS length (the thumb is --thumb wide and never leaves the track)
+const trackPos = (ms) => `calc(var(--thumb) / 2 + (100% - var(--thumb)) * ${((ms - START) / (END - START)).toFixed(6)})`;
 
 // ------------------------------------------------------------------ static shell, built once
 $("#app").innerHTML = `
@@ -54,20 +57,27 @@ $("#app").innerHTML = `
       </select>
     </div>
     <label class="sl-toggle"><input type="checkbox" data-testid="reveal" id="reveal"> Reveal answer key</label>
-    <div class="sl-count"><b data-testid="page-count"></b><span>page-outs so far</span></div>
+    <div class="sl-count" data-testid="page-counter"><b data-testid="page-count"></b><span>page-outs so far</span></div>
   </header>
-  <div class="sl-scrubrow"><input class="sl-scrub" type="range" id="scrub" aria-label="Simulated time"
-       min="${START}" max="${END}" step="${demo.meta.bucket_ms}">
-    <span class="sl-keys" data-testid="shortcuts"><kbd>space</kbd> play/pause <kbd>N</kbd> next page <kbd>R</kbd> answer key</span></div>
+  <div class="sl-scrubrow">
+    <div class="sl-track" data-testid="slider">
+      <div class="sl-track-shade" id="track-shade"></div>
+      <input class="sl-scrub" type="range" id="scrub" aria-label="Simulated time" min="${START}" max="${END}" step="${demo.meta.bucket_ms}">
+      <div class="sl-track-ticks" id="track-ticks"></div>
+    </div>
+    <span class="sl-keys" data-testid="shortcuts"><kbd>space</kbd> play/pause <kbd>N</kbd> next page <kbd>R</kbd> answer key</span>
+  </div>
   <main class="sl-main">
     <section class="sl-timeline" data-testid="timeline"><p class="sl-eyebrow">Pages, newest first</p><div id="cards"></div></section>
-    <section class="sl-detail" id="detail"></section>
+    <div class="sl-right">
+      <section class="sl-detail" id="detail"></section>
+      <section class="sl-chartwrap">
+        <div class="sl-chart-head"><h2 id="chart-title"></h2><div class="sl-chips" id="chips" data-testid="chips"></div></div>
+        <div class="sl-legend" id="legend" data-testid="legend"></div>
+        <div class="sl-chart" data-testid="chart" id="chart"></div>
+      </section>
+    </div>
   </main>
-  <section class="sl-chartwrap">
-    <div class="sl-chart-head"><h2 id="chart-title"></h2><div class="sl-chips" id="chips"></div></div>
-    <div class="sl-legend" id="legend"></div>
-    <div class="sl-chart" data-testid="chart" id="chart"></div>
-  </section>
   <section id="key"></section>`;
 
 const nextPage = () => { const n = nextPageOut(demo, state.t); play(false); if (n != null) { state.page = null; setT(n); } };
@@ -90,11 +100,23 @@ document.addEventListener("keydown", (e) => {
 });
 document.addEventListener("keyup", (e) => { if (e.key === " " && !typing(e.target)) e.preventDefault(); });
 $("#scrub").oninput = (e) => { play(false); setT(Number(e.target.value)); };
+// a tick on the slider: go to the moment that page fired, with that page selected
+$("#track-ticks").onclick = (e) => {
+  const tick = e.target.closest("[data-page]");
+  if (!tick) return;
+  play(false);
+  state.page = Number(tick.dataset.page); state.series = null; state.allChips = false;
+  setT(Number(tick.dataset.ms));
+};
 $("#cards").onclick = (e) => {
   const card = e.target.closest("[data-page]");
-  if (card) { state.page = Number(card.dataset.page); state.series = null; render(); }
+  if (card) { state.page = Number(card.dataset.page); state.series = null; state.allChips = false; render(); }
 };
-$("#chips").onclick = (e) => { const c = e.target.closest("[data-series]"); if (c) { state.series = c.dataset.series; render(); } };
+$("#chips").onclick = (e) => {
+  if (e.target.closest("[data-more]")) { state.allChips = !state.allChips; render(); return; }
+  const c = e.target.closest("[data-series]");
+  if (c) { state.series = c.dataset.series; render(); }
+};
 $("#detail").addEventListener("toggle", (e) => {
   const id = e.target.dataset?.note;
   if (id) e.target.open ? openEvidence.add(id) : openEvidence.delete(id);
@@ -103,26 +125,28 @@ $("#detail").addEventListener("toggle", (e) => {
 // ------------------------------------------------------------------ render
 const noteId = (r) => `${r.page}-${r.type}-${r.ready_at}`;
 const written = (r) => `written ${day(r.ready_at)} ${hhmmss(r.ready_at)} UTC`;
+const tags = (xs) => xs.map((x) => `<span class="sl-tag">${esc(x)}</span>`).join("");
 
 function noteCard(r, title, withHeading = true) {
   const id = noteId(r);
   const ev = r.evidence || [];
+  const cause = causeLabel(r.cause?.category);
   const guard = r.guard ? `<p class="sl-advisory">Guard: converted from "${esc(r.guard.converted_from)}": ${esc(r.guard.reason)}</p>` : "";
   return `<article class="sl-note" data-testid="note" data-type="${r.type}">
     ${withHeading ? `<h3>${title}<span class="sl-when">${written(r)}</span></h3>` : ""}
     <p><span class="sl-pill ${verdictClass(r.needs_human)}" data-testid="note-verdict">${esc(verdictText(r.needs_human))}</span>
        <span class="sl-advisory">confidence ${esc(r.confidence)} · advisory only</span></p>${guard}
-    <div class="sl-field" data-testid="cause"><b>Cause · ${esc(r.cause?.category || "-")}</b><p>${esc(r.cause?.description || "-")}</p></div>
-    <div class="sl-field" data-testid="impact"><b>Impact · ${esc((r.impact?.degraded || []).join(", ") || "none")}</b><p>${esc(r.impact?.description || "-")}</p></div>
+    <div class="sl-field" data-testid="cause"><b data-testid="cause-label">${esc(cause.label)}${cause.tag ? tags([cause.tag]) : ""}</b><p class="sl-prose">${esc(r.cause?.description || "-")}</p></div>
+    <div class="sl-field" data-testid="impact"><b>Impact${tags(r.impact?.degraded?.length ? r.impact.degraded : ["none"])}</b><p class="sl-prose">${esc(r.impact?.description || "-")}</p></div>
     <details class="sl-evidence" data-testid="evidence" data-note="${id}" ${openEvidence.has(id) ? "open" : ""}>
       <summary>Evidence (${ev.length})</summary>
-      <ul>${ev.map((e) => `<li><code>${esc(e.tool)}</code>${esc(e.finding)}</li>`).join("")}</ul>
+      <ul>${ev.map((e) => `<li><code>${esc(e.tool)}</code><span class="sl-prose">${esc(e.finding)}</span></li>`).join("")}</ul>
     </details>
-    <div class="sl-field" data-testid="next-step" style="margin-top:10px"><b>Next step</b><p>${esc(r.next_step || "-")}</p></div>
+    <div class="sl-field" data-testid="next-step" style="margin-top:10px"><b>Next step</b><p class="sl-prose">${esc(r.next_step || "-")}</p></div>
   </article>`;
 }
 
-function renderDetail(page, notes) {
+function renderDetail(page, notes, t) {
   if (!page) return `<p class="sl-eyebrow">Selected page</p><p class="sl-empty">No page-out yet. Press play or Next page.</p>`;
   // the final answer first (the follow-up when there is one); earlier notes collapsed below it, each
   // labelled with its own answer and time; merge records last
@@ -141,13 +165,26 @@ function renderDetail(page, notes) {
     `<p class="sl-link">${hhmm(r.ready_at)} UTC: page ${esc((r.absorbed || []).join(", "))} merged into this page after it paged.</p>`).join("");
   const cards = (last ? noteCard(last, last.type === "follow_up" ? "Follow-up: the final answer" : "Triage note")
                       : `<p class="sl-empty">The triage agent has not written a note yet.</p>`) + earlier + links;
+  const st = pageStatus(page, t);
   return `<div data-testid="page-detail" data-page="${page.page}">
     <p class="sl-eyebrow">Page ${page.page} · paged ${day(page.paged_at)} ${hhmm(page.paged_at)} UTC · ${page.alerts.length} alerts now${page.merged_into ? ` · merged into page ${page.merged_into}` : ""}</p>
     <h1 class="sl-headline" data-testid="reason-headline">${esc(page.reason)}</h1>
+    <p class="sl-status ${st.firing ? "is-firing" : ""}" data-testid="page-status">${st.firing ? "still firing" : `quiet since ${hhmm(st.lastAlertMs)} UTC`}</p>
     <div class="sl-badge ${verdictClass(page.verdict)}" data-testid="verdict">${esc(verdictText(page.verdict))}</div>
     <span class="sl-advisory" style="margin-left:10px">${from}</span>
-    ${cards || `<p class="sl-empty">The triage agent has not written a note yet.</p>`}
+    ${cards}
   </div>`;
+}
+
+function renderTrack(ui) {
+  // only pages that have fired by the clock: a tick for a later page would show the future
+  $("#track-ticks").innerHTML = ui.pages.map((p) =>
+    `<button class="sl-tick" data-testid="slider-tick" data-page="${p.page}" data-ms="${p.paged_at}" style="left:${trackPos(p.paged_at)}"
+       title="page ${p.page} · ${day(p.paged_at)} ${hhmm(p.paged_at)} UTC" aria-label="Go to page ${p.page}, ${day(p.paged_at)} ${hhmm(p.paged_at)} UTC"></button>`).join("");
+  // answer key on: every injection of the week (hidden from the system; the labelled exception)
+  $("#track-shade").innerHTML = state.reveal ? attackerView(demo, state.t).all.map((i) =>
+    `<div class="sl-shade" data-testid="slider-injection" data-id="${esc(i.id)}" title="${esc(i.id)} (answer key)"
+       style="left:${trackPos(i.start)};width:calc((100% - var(--thumb)) * ${((i.stop - i.start) / (END - START)).toFixed(6)})"></div>`).join("") : "";
 }
 
 function render() {
@@ -165,6 +202,7 @@ function render() {
   $("#reveal").checked = state.reveal;
   $("#scrub").value = t;
   $("[data-testid=page-count]").textContent = ui.page_count;
+  renderTrack(ui);
 
   // timeline: a card that was not there on the previous render slides in
   const prev = shownPages;
@@ -179,10 +217,22 @@ function render() {
     </button>`;
   }).join("") : `<p class="sl-empty">No page-out yet.</p>`;
 
-  $("#detail").innerHTML = renderDetail(page, page ? ui.notes[String(page.page)] : []);
+  $("#detail").innerHTML = renderDetail(page, page ? ui.notes[String(page.page)] : [], t);
   renderChart(page, ui);
   renderKey();
   if (!state.playing) syncUrl();
+}
+
+function renderChips(ranked, sid, t) {
+  const many = ranked.length > CHIPS_SHOWN;
+  const shown = state.allChips || !many ? ranked : ranked.filter((r, i) => i < CHIPS_SHOWN || r.sid === sid);
+  const chip = (r) => {
+    const info = demo.series_index[r.sid];
+    return `<button class="sl-chip${r.sid === sid ? " is-on" : ""}${r.firing ? " is-firing" : ""}" data-testid="series-chip" data-series="${esc(r.sid)}"
+      data-firing="${r.firing ? 1 : 0}" title="${r.count} alerts${r.firing ? ", alerting in the last 10 min" : ""}">${esc(info.entity + " " + info.label)}<span class="sl-chip-n">${r.count}</span></button>`;
+  };
+  const more = many ? `<button class="sl-chip sl-chip-more" data-more="1" data-testid="chips-more">${state.allChips ? "fewer" : `+${ranked.length - shown.length} more`}</button>` : "";
+  return shown.map(chip).join("") + more;
 }
 
 function renderChart(page, ui) {
@@ -195,25 +245,34 @@ function renderChart(page, ui) {
     chart.clear();
     return;
   }
-  const sid = page.series.includes(state.series) ? state.series : page.series.includes(page.paging_target) ? page.paging_target : page.series[0];
-  const info = demo.series_index[sid], seasonal = info.rule === "seasonal", t = state.t, from = t - S.lookback_hours * H;
-  const pts = seriesPoints(demo, series, sid, t, S.lookback_hours);
-  const alerts = page.alerts.filter((a) => a.target === sid && a.time >= from);
+  const t = state.t;
+  // the series that paged first (the headline's, preselected), then the rest by alert strength (alerts up to the clock)
+  const ranked = rankSeries(page, t);
+  const sid = page.series.includes(state.series) ? state.series : ranked[0].sid;
+  const info = demo.series_index[sid], seasonal = info.rule === "seasonal";
+  // the window is anchored on the page, not the clock: paged_at - 3 h to paged_at + 2 h, capped at the clock
+  const { from, to, nowInside } = chartWindow(page, t);
+  const H = 3600e3;
+  const pts = seriesPoints(demo, series, sid, t, (t - from) / H).filter((p) => p[0] <= to);
+  const alerts = page.alerts.filter((a) => a.target === sid && a.time >= from && a.time <= to);
   const down = alerts.length && alerts.every((a) => a.direction === "down");
-  el.dataset.series = sid;
+  const inWin = (ms) => ms >= from && ms <= to;
+  const streamIn = START > from && START <= to;
+  el.dataset.series = sid; el.dataset.from = from; el.dataset.to = to;
   $("#chart-title").textContent = `${info.entity} ${info.label}`;
-  $("#chips").innerHTML = page.series.length > 1 ? page.series.map((s) =>
-    `<button class="sl-chip${s === sid ? " is-on" : ""}" data-series="${esc(s)}">${esc(demo.series_index[s].entity + " " + demo.series_index[s].label)}</button>`).join("") : "";
+  $("#chips").innerHTML = page.series.length > 1 ? renderChips(ranked, sid, t) : "";
+  const leg = (style, text) => `<span><i style="${style}"></i>${text}</span>`;
   $("#legend").innerHTML = [
-    `<span><i style="border-color:var(--chart-value)"></i>5-min mean</span>`,
-    seasonal && `<span><i style="border-color:var(--chart-expected);border-top-style:dashed"></i>expected</span>`,
-    seasonal && `<span><i style="border-color:var(--chart-band);border-top-width:8px"></i>wobble band (expected +/- 1 wobble)</span>`,
-    seasonal && `<span><i style="border-color:var(--chart-hot);border-top-style:dotted"></i>hot line (expected ${down ? "-" : "+"} ${S.hot_z} x wobble)</span>`,
-    `<span><i style="border-color:var(--chart-hot);border-top-style:dashed"></i>alert</span>`,
-    `<span><i style="border-color:var(--chart-hot);border-top-width:3px"></i>page fired</span>`,
-    `<span><i style="border-color:var(--chart-change)"></i>change</span>`,
-    state.reveal && `<span><i style="border-color:var(--key);border-top-width:8px"></i>injection (answer key)</span>`,
-    START > from && `<span data-testid="stream-start-legend"><i style="border-color:var(--text-faint);border-top-style:dotted"></i>stream starts (before it: the quiet-world history the engine had)</span>`,
+    leg("border-color:var(--chart-value)", "mean"),
+    seasonal && leg("border-color:var(--chart-expected);border-top-style:dashed", "expected"),
+    seasonal && leg("border-color:var(--chart-band);border-top-width:8px", "±1 wobble"),
+    seasonal && leg("border-color:var(--chart-hot);border-top-style:dotted", `hot (${down ? "-" : "+"}${S.hot_z} wobble)`),
+    leg("border-color:var(--chart-hot);border-top-style:dashed", "alert"),
+    leg("border-color:var(--chart-hot);border-top-width:3px", "page"),
+    leg("border-color:var(--chart-change)", "change"),
+    nowInside && leg("border-color:var(--text)", "now"),
+    streamIn && `<span data-testid="stream-start-legend"><i style="border-color:var(--text-faint);border-top-style:dotted"></i>stream start</span>`,
+    state.reveal && leg("border-color:var(--key);border-top-width:8px", "injection"),
   ].filter(Boolean).join("");
 
   const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
@@ -222,19 +281,21 @@ function renderChart(page, ui) {
   const lo = pts.map((p) => [p[0], p[2] == null || p[3] == null ? null : p[2] - p[3]]);
   const width = pts.map((p) => [p[0], p[3] == null ? null : 2 * p[3]]);
   const hot = pts.map((p) => [p[0], p[2] == null || p[3] == null ? null : p[2] + (down ? -1 : 1) * S.hot_z * p[3]]);
+  const label = (text, color, position) => ({ show: true, formatter: text, color, fontFamily: font.fontFamily, fontSize: 11, position });
   const marks = [
     ...alerts.map((a) => ({ xAxis: a.time, name: "alert", lineStyle: { color: v("--chart-hot"), type: "dashed", width: 1, opacity: 0.75 }, label: { show: false } })),
-    ...(page.paged_at >= from ? [{ xAxis: page.paged_at, name: "page", lineStyle: { color: v("--chart-hot"), type: "solid", width: 3 }, label: { show: true, formatter: `page ${page.page}`, color: v("--amber"), fontFamily: font.fontFamily, fontSize: 11, position: "insideEndTop" } }] : []),
-    ...ui.changes.filter((c) => c.ts_ms >= from).map((c) => ({ xAxis: c.ts_ms, name: "change", lineStyle: { color: v("--chart-change"), type: "solid", width: 1.5 }, label: { show: true, formatter: c.change_id, color: v("--teal"), fontFamily: font.fontFamily, fontSize: 11, position: "insideEndBottom" } })),
-    ...(START > from ? [{ xAxis: START, name: "stream", lineStyle: { color: v("--text-faint"), type: "dotted", width: 1.5 }, label: { show: true, formatter: "stream starts", color: v("--text-dim"), fontFamily: font.fontFamily, fontSize: 11, position: "insideEndTop" } }] : []),
+    { xAxis: page.paged_at, name: "page", lineStyle: { color: v("--chart-hot"), type: "solid", width: 3 }, label: label(`page ${page.page}`, v("--amber"), "insideEndTop") },
+    ...ui.changes.filter((c) => inWin(c.ts_ms)).map((c) => ({ xAxis: c.ts_ms, name: "change", lineStyle: { color: v("--chart-change"), type: "solid", width: 1.5 }, label: label(c.change_id, v("--teal"), "insideEndBottom") })),
+    ...(streamIn ? [{ xAxis: START, name: "stream", lineStyle: { color: v("--text-faint"), type: "dotted", width: 1.5 }, label: label("stream starts", v("--text-dim"), "insideEndTop") }] : []),
+    ...(nowInside ? [{ xAxis: t, name: "now", lineStyle: { color: v("--text"), type: "solid", width: 1 }, label: label("now", v("--text"), "insideEndBottom") }] : []),
   ];
-  const areas = state.reveal ? attackerView(demo, t).all.filter((i) => i.stop > from && i.start < t && i.series.includes(sid))
-    .map((i) => [{ xAxis: Math.max(i.start, from), name: i.id }, { xAxis: Math.min(i.stop, t) }]) : [];
+  const areas = state.reveal ? attackerView(demo, t).all.filter((i) => i.stop > from && i.start < to && i.series.includes(sid))
+    .map((i) => [{ xAxis: Math.max(i.start, from), name: i.id }, { xAxis: Math.min(i.stop, to) }]) : [];
   chart.setOption({
     animation: false, useUTC: true, backgroundColor: "transparent",
     grid: { left: 70, right: 28, top: 28, bottom: 34 },
     tooltip: { trigger: "axis", backgroundColor: v("--bg-raise"), borderColor: v("--line-strong"), textStyle: { ...font, color: v("--text") } },
-    xAxis: { type: "time", min: from, max: t, axisLabel: { ...font, formatter: "{HH}:{mm}", hideOverlap: true },
+    xAxis: { type: "time", min: from, max: to, axisLabel: { ...font, formatter: "{HH}:{mm}", hideOverlap: true },
              axisLine: { lineStyle: { color: v("--line-strong") } }, splitLine: { show: true, lineStyle: { color: v("--line"), opacity: 0.5 } } },
     yAxis: { type: "value", scale: true, axisLabel: { ...font, formatter: fmtNum }, splitLine: { lineStyle: { color: v("--line"), opacity: 0.5 } } },
     series: [
@@ -258,13 +319,13 @@ function renderKey() {
   const view = attackerView(demo, state.t), active = new Set(view.active.map((i) => i.id));
   el.innerHTML = `<div class="sl-key" data-testid="answer-key">
     <h2>Answer key: hidden from the system</h2>
-    <p class="sl-advisory">The attacker's injections for the whole week, including after the clock. Nothing here reaches the detector, the pages or the triage agent. Rows active at the clock are bright; on the chart, an injection that touched the shown series is shaded.</p>
+    <p class="sl-advisory">The attacker's injections for the whole week, including after the clock. Nothing here reaches the detector, the pages or the triage agent. Rows active at the clock are bright; on the chart, an injection that touched the shown series is shaded, and on the time slider every injection is.</p>
     <table><thead><tr><th>id</th><th>start</th><th>stop</th><th>kind</th><th>severity</th><th>intent</th></tr></thead><tbody>
-    ${view.all.map((i) => `<tr class="${active.has(i.id) ? "is-active" : ""}"><td>${esc(i.id)}${active.has(i.id) ? " (active)" : ""}</td><td>${day(i.start)} ${hhmm(i.start)}</td><td>${hhmm(i.stop)}</td><td>${esc(i.kind === "named" ? i.scenario : "generic")}</td><td>${esc(i.severity)}</td><td>${esc(i.intent)}</td></tr>`).join("")}
+    ${view.all.map((i) => `<tr class="${active.has(i.id) ? "is-active" : ""}"><td>${esc(i.id)}${active.has(i.id) ? " (active)" : ""}</td><td>${day(i.start)} ${hhmm(i.start)}</td><td>${hhmm(i.stop)}</td><td>${esc(i.kind === "named" ? i.scenario : "generic")}</td><td>${esc(i.severity)}</td><td class="sl-prose">${esc(i.intent)}</td></tr>`).join("")}
     </tbody></table></div>`;
 }
 
 window.addEventListener("resize", () => chart && chart.resize());
-window.__sl = { state, get chart() { return chart; }, demo };     // read by the Playwright checks only
+window.__sl = { state, get chart() { return chart; }, demo, FIRING_MS };     // read by the Playwright checks only
 render();
 document.body.dataset.ready = "1";

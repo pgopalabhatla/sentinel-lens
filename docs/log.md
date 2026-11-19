@@ -958,3 +958,44 @@ I broke the page twice to see two of these fail. With the first note on top, the
 The demo no longer needs `.venv-dashboard`. `docs/dashboard-compare/` stays, with a line naming B as chosen and why.
 
 Tests: `pytest` (default, `.venv`) 471 passed, in 82 s. `pytest -m ui` (the browser checks) 1 passed in 99 s.
+
+## Nov 19, dashboard UI fixes: the chart follows the page, nothing clipped
+
+Branch `dashboard-ui-2`, off main, not merged. Only the dashboard changed. The detector, the agents, the data and the no-future rule are untouched: `ui_state` and its JS port are as they were.
+
+**The bug.** The chart's window was the 12 h before the clock. So once a page was older than 12 h, its own spike was off-screen. Page 3 fires at 04:14, but selected at the end of the week its chart showed only the hours before the clock. The window is now anchored on the selected page: 3 h before it to 2 h after, cut off at the clock. A "now" line marks the clock while it is inside that span. I chose to cut the window off at the clock rather than show an empty stretch after it, because nothing after the clock can be drawn anyway.
+
+**The rest.**
+- **Nothing clipped.** The page scrolls naturally: no fixed-height panels. The timeline sticks to the top with a visible scrollbar, and the chart follows the note in the right column.
+- **Typefaces.** Sentences (cause, impact, next step, evidence, the attacker's intent) are in IBM Plex Sans. Numbers, times, labels and badges stay in IBM Plex Mono. Plex Sans was picked because it pairs with Plex Mono and is not on the excluded list.
+- **Slider.**
+  - A clickable tick for each page fired by the clock. A tick for a later page would show the future, so the ticks follow the clock like the timeline does.
+  - Answer key on: every injection shaded on the track. Like the rest of the answer-key view, that shows the future, and it is labelled.
+- **Series chips.** Sorted by alert strength:
+  - the highest score;
+  - then the most alerts, because scores saturate at 1.0 for almost every series;
+  - then how far past the line the strongest alert went;
+  - then the paging series.
+
+  The strongest is preselected, which on page 3 is worker-1 GC time rather than the paging series, worker-0 CPU. A dot marks series alerting in the last 10 minutes; 5 are shown, with "+N more".
+- **Cause label.** "Likely cause (unconfirmed)" when the category is unknown; otherwise "Cause" with the category as a tag.
+- **Status line.** "Still firing" (an alert emitted in the last 10 minutes; alerts within a page come every 5 minutes, 334 of 336 gaps) or "quiet since HH:MM UTC". It is computed from the page's alerts up to the clock.
+- **Size.** Headline 52 to 40 px; a shorter, one-line legend.
+
+These view choices are pure functions in `dashboard/shared/view.js`, tested through Node (`tests/test_dashboard_view.py`).
+
+**Checks** (`dashboard/e2e/check.mjs`). New:
+- every page, selected in turn at 3 clocks (29 selections), has its paging time inside the chart's visible x-range;
+- layout at 1440x900 and 1280x800: the final note's last line is reachable, uncovered and unclipped; the counter is fully on screen; the legend is one line;
+- slider ticks and shading;
+- status line, chips, cause label, typefaces.
+
+Each new check failed on a broken page first:
+- The old clock-following window failed the every-page check on every page at the end of the week.
+- A fixed-height detail box with hidden overflow failed the layout check, but only after a fix to the check itself. Its first version used `scrollIntoView`, which scrolls `overflow: hidden` boxes that a reader cannot, so it passed the broken page. It now scrolls only the page and boxes with a scrollbar.
+
+All checks pass; play-through 401 ms/tick. Screenshots are now full pages.
+
+Tests: `pytest` (default, `.venv`) 476 passed, in 87 s. `pytest -m ui` 1 passed in 123 s.
+
+**Follow-up: the headline's series first.** Preselecting the strongest series put a different series on the chart than the one the headline names. On page 3 that was worker-1 GC time under "trino-worker-0 CPU 6.3x expected". The series that paged now comes first and is preselected, and the other chips keep the strength order. A new check selects every page (29 selections) and requires the selected chip and the charted series to equal the paging alert's series, taken from the export rather than from `view.js`. The old order fails it on page 3. All checks pass.

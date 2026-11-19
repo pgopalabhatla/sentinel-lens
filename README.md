@@ -378,21 +378,35 @@ It holds the page and the data. ECharts and the fonts load from their CDNs. Rebu
 is out of date.
 
 Move the clock with the slider, press Play (5 min, 15 min, 1 h or 6 h of simulated time per tick), or jump
-to the next page-out. The keys are space for play/pause, N for next page and R for the answer key. Every view is a link: `?t=2026-10-30T00:30Z&page=14&reveal=1`.
+to the next page-out. The slider has a tick for each page fired so far; click one to go to that page.
+The keys are space for play/pause, N for next page and R for the answer key. Every view is a link:
+`?t=2026-10-30T00:30Z&page=14&reveal=1`.
 
 - **Pages, newest first**: every page-out up to the clock, each with a one-line reason
   ("trino-worker-0 CPU 6.3x expected") and the triage agent's current answer.
-- **The selected page**: the reason, the answer as a badge (needs human: yes / unsure / no), and then the
-  triage agent's final answer card (run 1 of 3). That card is the follow-up when there was one. It gives
-  cause, impact, evidence (collapsed) and next step. The earlier note sits collapsed below it, labelled
-  with its own answer and time. Each note appears only once the agent had written it.
-- **The chart**: one series of the page, as 5-minute means over the last 12 h. For a seasonal series it
-  also shows the expected value, a +/- wobble band and the hot line (expected + 6 x wobble). Markers show
-  the page's alerts, the page-out, and changes (deploys and the like, from when they were streamed). The
-  x axis is in UTC. On the first day, the window reaches back before the stream into the quiet-world
-  history the engine had, and a dotted line marks where the stream starts.
+- **The selected page**:
+  - the reason;
+  - a status line: "still firing" (an alert in the last 10 minutes) or "quiet since HH:MM UTC";
+  - the answer as a badge (needs human: yes / unsure / no);
+  - the triage agent's final answer card (run 1 of 3). That card is the follow-up when there was one. It
+    gives cause, impact, evidence (collapsed) and next step. An unknown cause is headed "Likely cause
+    (unconfirmed)".
+
+  The earlier note sits collapsed below the final card, labelled with its own answer and time. Each note
+  appears only once the agent had written it.
+- **The chart**: one series of the page, as 5-minute means.
+  - **The window** runs from 3 h before the page to 2 h after it, cut off at the clock, so the page is
+    always in view. A "now" line marks the clock while it is inside the window.
+  - **Which series**: the series that paged (the headline's) is preselected and its chip comes first.
+    The other chips follow by alert strength. A dot marks series alerting in the last 10 minutes; 5
+    chips are shown, with "+N more".
+  - **What it shows**: for a seasonal series, the expected value, a +/- wobble band and the hot line
+    (expected + 6 x wobble). Markers show the page's alerts, the page-out, and changes (deploys and the
+    like, from when they were streamed).
+  - The x axis is in UTC. On the first day the window reaches back before the stream, into the
+    quiet-world history the engine had; a dotted line marks where the stream starts.
 - **Reveal answer key** (off by default): the attacker's injections, labelled *hidden from the system*,
-  and shading on the chart. It is the one view that shows the future of the clock. Everything else
+  and shading on the chart and the slider. It is the one view that shows the future of the clock. Everything else
   shows only what existed at the clock: `ui_state(t)` in `dashboard/data.py`, ported to
   `dashboard/shared/visibility.js`.
 
