@@ -900,3 +900,33 @@ The predictions are empty; the runner refuses until they are filled in and commi
 - Lesson: record `pip freeze` next to every frozen result. Live week 2's result does not name its package versions.
 
 Tests: `pytest` (default, `.venv`, pandas 3.1.0) 456 passed, 5 skipped (the render tests, no Streamlit there), in 80 s. In `.venv-dashboard`: `tests/test_dashboard.py` 16 passed, including the 5 render tests.
+
+## Nov 19, dashboard v2: three variants from one spec, one test, no winner picked
+
+Branch `dashboard-v2`, off `dashboard`. The detector, the engine, the frozen triage and attacker agents and `data/` are untouched. Write-up with screenshots and numbers: [dashboard-compare/README.md](dashboard-compare/README.md).
+
+**Why three.** v1 had two visible bugs: text from the previous page showing under the next one (page 14's chg-0007 under page 17), and a time axis in the browser's local time. It was also hard to read under pressure. Before choosing a UI stack I wanted a like-for-like comparison: one design spec, one data export, one test script, and three builds. The variants are Streamlit restyled (A), one static HTML/JS page with ECharts (B), and React + Vite + Recharts (C).
+
+**One rule, one export.** `ui_state(t)` in `dashboard/data.py` is everything the system's panels may show at `t`. A calls it directly. B and C use a port, `dashboard/shared/visibility.js`, and a pytest runs the port in Node and checks it gives exactly the Python output at the 7 clocks of `test_dashboard.py`. `dashboard/export_ui.py` writes `demo.json` + `series.json` with nothing filtered for a clock, and gives byte-identical output under pandas 2.3 and 3.1. Two data fixes came with it. The export now carries the change log, visible from its stream record, a minute after the change, which is when the triage agent could see it. And non-finite numbers load as null: 55 alerts have z = +inf, which browsers refuse in JSON.
+
+**One test.** `dashboard/e2e/compare.mjs` (Playwright) starts each variant and drives it through the same URL and DOM contract, in a browser set to Los Angeles time. It covers: screenshots, no future data, chart labels UTC 24 h with markers where the labels put them, page 14 then 17, no truncation, the answer key, first render and a play-through. It reads the chart from the SVG rather than any library's API, so the same check applies to Vega, ECharts and Recharts. I broke B four ways to see each check fail: local time, stale detail, ellipsis CSS, a 6 h leak. The stale-content check missed the first time, because it read only the first detail element; it now reads the whole column.
+
+**Result.** All three pass every check. The differences are elsewhere:
+- Play-through at 1 h/tick (168 ticks, target 400 ms each): A ran 518-524 ms/tick, because every tick is a full Streamlit rerun. B and C ran 400 ms/tick.
+- First render, over two runs: A 0.89-0.92 s, B 0.99-1.37 s, C 1.08-1.11 s. These come from one machine, with fonts and ECharts fetched over the network, so they are noisy.
+- Own code: A 393 lines, B 239, C 285.
+- Dependencies: A needs its own 554 MB venv. B installs nothing. C has 90 npm packages and a build step.
+
+**Found in Streamlit, each now tested.**
+- A keyed container does not remount. The page text was replaced, but React reused the `<details>` elements, so page 14's opened evidence was still open on page 17. `st.html` fixes it. The page 14 then 17 check now also requires collapsed evidence on arrival.
+- A numeric domain on a `utc` time scale draws nothing in Streamlit's bundled Vega-Lite. ISO-string bounds work.
+- `labelFlush` moved the edge labels 11 px off their ticks.
+- `AppTest` cannot rerun a script that has `st.pills` on it, so the series picker is a radio styled as chips.
+
+Choices to defend:
+- **A's chart stays Altair/Vega** rather than a custom component. It is the Streamlit-native path, so the comparison shows Streamlit as people would use it.
+- **The Streamlit variant keeps its own Python formatting** (about 15 lines) rather than sharing the JS one. The visibility rule is the only shared logic that matters, and it is tested.
+- **B's one-file build is a 37-line concatenation script, not a bundler.** The served page needs no build. The single file exists only for publishing.
+- **v1 (`dashboard/app.py`) is kept unchanged** as the baseline. I did not re-measure it with the new script, which needs the new DOM contract.
+
+Tests: `pytest` (default, `.venv`) 469 passed, 11 skipped (A's chart and AppTest tests, no Streamlit there), in 83 s. In `.venv-dashboard`: the dashboard tests (`test_dashboard.py`, `test_dashboard_ui.py`, `test_dashboard_variants.py`) 35 passed. `pytest -m ui` (the Playwright comparison of all three) 1 passed in 5 min 6 s.

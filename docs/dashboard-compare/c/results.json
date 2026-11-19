@@ -1,0 +1,382 @@
+{
+ "variant": "C: React + Vite + Recharts",
+ "browser_timezone": "America/Los_Angeles",
+ "at": "2026-11-19T20:49:31.207Z",
+ "first_render": {
+  "runs_ms": [
+   1068,
+   1086,
+   1082
+  ],
+  "median_ms": 1082
+ },
+ "clocks": [
+  {
+   "clock": "2026-10-26T04:30Z",
+   "ok": true,
+   "problems": [],
+   "chart": {
+    "ok": true,
+    "problems": [],
+    "labels": [
+     "17:00",
+     "18:00",
+     "19:00",
+     "20:00",
+     "21:00",
+     "22:00",
+     "23:00",
+     "00:00",
+     "01:00",
+     "02:00",
+     "03:00",
+     "04:00"
+    ],
+    "fit": {
+     "labels": 12,
+     "maxResidualPx": 0
+    },
+    "markers": {
+     "alert": {
+      "expected": 4,
+      "drawn": 4,
+      "worstOffsetPx": 0
+     },
+     "page_mark": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     },
+     "change": {
+      "expected": 0,
+      "drawn": 0,
+      "worstOffsetPx": null
+     }
+    }
+   }
+  },
+  {
+   "clock": "2026-10-28T13:40Z",
+   "ok": true,
+   "problems": [],
+   "chart": {
+    "ok": true,
+    "problems": [],
+    "labels": [
+     "02:00",
+     "03:00",
+     "04:00",
+     "05:00",
+     "06:00",
+     "07:00",
+     "08:00",
+     "09:00",
+     "10:00",
+     "11:00",
+     "12:00",
+     "13:00"
+    ],
+    "fit": {
+     "labels": 12,
+     "maxResidualPx": 0
+    },
+    "markers": {
+     "alert": {
+      "expected": 4,
+      "drawn": 4,
+      "worstOffsetPx": 0
+     },
+     "page_mark": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     },
+     "change": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     }
+    }
+   }
+  },
+  {
+   "clock": "2026-10-29T00:20Z",
+   "ok": true,
+   "problems": [],
+   "chart": {
+    "ok": true,
+    "problems": [],
+    "labels": [
+     "13:00",
+     "14:00",
+     "15:00",
+     "16:00",
+     "17:00",
+     "18:00",
+     "19:00",
+     "20:00",
+     "21:00",
+     "22:00",
+     "23:00",
+     "00:00"
+    ],
+    "fit": {
+     "labels": 12,
+     "maxResidualPx": 0
+    },
+    "markers": {
+     "alert": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     },
+     "page_mark": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     },
+     "change": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     }
+    }
+   }
+  },
+  {
+   "clock": "2026-10-30T00:30Z",
+   "ok": true,
+   "problems": [],
+   "chart": {
+    "ok": true,
+    "problems": [],
+    "labels": [
+     "13:00",
+     "14:00",
+     "15:00",
+     "16:00",
+     "17:00",
+     "18:00",
+     "19:00",
+     "20:00",
+     "21:00",
+     "22:00",
+     "23:00",
+     "00:00"
+    ],
+    "fit": {
+     "labels": 12,
+     "maxResidualPx": 0
+    },
+    "markers": {
+     "alert": {
+      "expected": 5,
+      "drawn": 5,
+      "worstOffsetPx": 0
+     },
+     "page_mark": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     },
+     "change": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     }
+    }
+   }
+  },
+  {
+   "clock": "2026-11-01T01:00Z",
+   "ok": true,
+   "problems": [],
+   "chart": {
+    "ok": true,
+    "problems": [],
+    "labels": [
+     "13:00",
+     "14:00",
+     "15:00",
+     "16:00",
+     "17:00",
+     "18:00",
+     "19:00",
+     "20:00",
+     "21:00",
+     "22:00",
+     "23:00",
+     "00:00",
+     "01:00"
+    ],
+    "fit": {
+     "labels": 13,
+     "maxResidualPx": 0
+    },
+    "markers": {
+     "alert": {
+      "expected": 9,
+      "drawn": 9,
+      "worstOffsetPx": 0
+     },
+     "page_mark": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     },
+     "change": {
+      "expected": 0,
+      "drawn": 0,
+      "worstOffsetPx": null
+     }
+    }
+   }
+  },
+  {
+   "clock": "2026-11-01T01:00Z",
+   "ok": true,
+   "problems": [],
+   "chart": {
+    "ok": true,
+    "problems": [],
+    "labels": [
+     "13:00",
+     "14:00",
+     "15:00",
+     "16:00",
+     "17:00",
+     "18:00",
+     "19:00",
+     "20:00",
+     "21:00",
+     "22:00",
+     "23:00",
+     "00:00",
+     "01:00"
+    ],
+    "fit": {
+     "labels": 13,
+     "maxResidualPx": 0
+    },
+    "markers": {
+     "alert": {
+      "expected": 9,
+      "drawn": 9,
+      "worstOffsetPx": 0
+     },
+     "page_mark": {
+      "expected": 1,
+      "drawn": 1,
+      "worstOffsetPx": 0
+     },
+     "change": {
+      "expected": 0,
+      "drawn": 0,
+      "worstOffsetPx": null
+     }
+    }
+   }
+  },
+  {
+   "clock": "2026-10-26T00:00Z",
+   "ok": true,
+   "problems": []
+  },
+  {
+   "clock": "2026-11-02T00:00Z",
+   "ok": true,
+   "problems": [],
+   "chart": {
+    "ok": true,
+    "problems": [],
+    "labels": [
+     "12:00",
+     "13:00",
+     "14:00",
+     "15:00",
+     "16:00",
+     "17:00",
+     "18:00",
+     "19:00",
+     "20:00",
+     "21:00",
+     "22:00",
+     "23:00",
+     "00:00"
+    ],
+    "fit": {
+     "labels": 13,
+     "maxResidualPx": 0
+    },
+    "markers": {
+     "alert": {
+      "expected": 0,
+      "drawn": 0,
+      "worstOffsetPx": null
+     },
+     "page_mark": {
+      "expected": 0,
+      "drawn": 0,
+      "worstOffsetPx": null
+     },
+     "change": {
+      "expected": 0,
+      "drawn": 0,
+      "worstOffsetPx": null
+     }
+    }
+   }
+  }
+ ],
+ "page_switch_14_17": {
+  "ok": true,
+  "problems": [],
+  "after17": {
+   "page": 17,
+   "notes": 2,
+   "mentionsChg0007": false,
+   "evidenceOpenOnArrival": 0
+  }
+ },
+ "truncation": {
+  "ok": true,
+  "problems": [],
+  "checked": 119
+ },
+ "answer_key": {
+  "ok": true,
+  "problems": [],
+  "listed": 11
+ },
+ "screenshots": [
+  "2026-10-26T0430Z_1440x900.png",
+  "2026-10-28T1340Z_1440x900.png",
+  "2026-10-29T0020Z_1440x900.png",
+  "2026-10-30T0030Z_1440x900.png",
+  "2026-11-01T0100Z_1440x900.png",
+  "2026-10-26T0430Z_1440x900_reveal.png",
+  "2026-10-26T0430Z_1280x800.png",
+  "2026-10-28T1340Z_1280x800.png",
+  "2026-10-29T0020Z_1280x800.png",
+  "2026-10-30T0030Z_1280x800.png",
+  "2026-11-01T0100Z_1280x800.png"
+ ],
+ "play_through": {
+  "simulated_hours": 168,
+  "wall_ms": 67270,
+  "ideal_ms": 67200,
+  "ms_per_tick": 400,
+  "final_page_count": 13,
+  "count_monotonic": true,
+  "ok": true
+ },
+ "summary": {
+  "no_future_data": true,
+  "chart_utc_and_markers": true,
+  "page_switch_14_17": true,
+  "no_truncation": true,
+  "answer_key_labelled": true,
+  "play_through": true,
+  "all_clock_checks": true
+ }
+}

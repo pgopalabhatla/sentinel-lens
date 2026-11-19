@@ -404,6 +404,11 @@ Streamlit, so it is skipped in `.venv`. Run it with
 `PYTHONPATH=. .venv-dashboard/bin/python -m pytest tests/test_dashboard.py` (after
 `.venv-dashboard/bin/pip install pytest`).
 
+Branch `dashboard-v2` adds three restyled variants of this dashboard, built from one design spec and one
+export: Streamlit, a static HTML/JS page, and React + Vite. One Playwright script tests all three.
+Screenshots, check results, size and how to run each:
+[docs/dashboard-compare/README.md](docs/dashboard-compare/README.md).
+
 ### Inject a failure
 
 While the publisher runs it takes commands from the topic `control` and changes the readings it

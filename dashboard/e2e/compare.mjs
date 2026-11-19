@@ -23,7 +23,7 @@ import { spawn, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { uiState, seriesPoints, attackerView } from "../shared/visibility.js";
+import { uiState, attackerView } from "../shared/visibility.js";
 import { verdictText } from "../shared/format.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -32,7 +32,6 @@ const ROOT = resolve(DASH, "..");
 const OUT = join(ROOT, "docs", "dashboard-compare");
 const UI = join(DASH, "demo", "live-week-2", "ui");
 const demo = JSON.parse(readFileSync(join(UI, "demo.json"), "utf8"));
-const series = JSON.parse(readFileSync(join(UI, "series.json"), "utf8"));
 const H = 3600e3, LOOKBACK = demo.settings.lookback_hours;
 
 export const CLOCKS = ["2026-10-26T04:30Z", "2026-10-28T13:40Z", "2026-10-29T00:20Z", "2026-10-30T00:30Z", "2026-11-01T01:00Z"];
@@ -122,7 +121,6 @@ function expectedChart(ref, t, pageNo, sid) {
     alert: p.alerts.filter((a) => a.target === s && a.time >= from).map((a) => a.time),
     page_mark: p.paged_at >= from ? [p.paged_at] : [],
     change: ref.changes.filter((c) => c.ts_ms >= from).map((c) => c.ts_ms),
-    lastPoint: (seriesPoints(demo, series, s, t, LOOKBACK).at(-1) || [null])[0],
   };
 }
 
