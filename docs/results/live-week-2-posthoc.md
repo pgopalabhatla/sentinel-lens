@@ -14,6 +14,21 @@ they say what a different setting or a different injection *would* have done. Th
 results, and they are not evidence that a change would help overall (false pages were not measured for
 them).
 
+**Regenerating every number.** The scripts are in [scripts/posthoc/](../../scripts/posthoc/). They read only.
+
+```bash
+export PYTHONPATH=.
+python scripts/posthoc/lw2_export_topics.py      # once, needs the broker: topics -> runs/live-week-2/topics/ (gitignored)
+python scripts/posthoc/lw2_s1_predictions.py     # section 1
+python scripts/posthoc/lw2_s2_dag_pause.py       # section 2
+python scripts/posthoc/lw2_s3_flink_leak.py      # section 3 (incl. the floor=0 counterfactual)
+python scripts/posthoc/lw2_s4_target_naming.py   # section 4 (incl. change-record publish times)
+python scripts/posthoc/lw2_s5_generic.py         # section 5 (incl. the no-guardrail counterfactual)
+python scripts/posthoc/lw2_s6_late_starts.py     # section 6
+```
+
+Shared paths and loaders: [lw2_common.py](../../scripts/posthoc/lw2_common.py).
+
 ## 1. Predictions vs result
 
 | | prediction (range) | result | vs range | result's 95% interval contains the point prediction? |
