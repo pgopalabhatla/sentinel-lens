@@ -87,7 +87,7 @@ async function open(v, ctx, q) {
 }
 
 // what the selected page's chart should show at t (from the reference view): the window anchored on the
-// page (shared/view.js chartWindow), the strongest series unless one was chosen
+// page (shared/view.js chartWindow), the paging (headline) series unless one was chosen
 function expectedChart(ref, t, pageNo, sid) {
   const p = pageNo != null ? ref.pages.find((x) => x.page === pageNo) : ref.pages[0];
   if (!p) return null;
@@ -444,7 +444,19 @@ async function checkAllPagesInWindow(v, ctx, clocks) {
     for (const p of ref.pages) {
       await page.click(v.cardClick(p.page)); await settle(v, page, true);
       const exp = expectedChart(ref, t, p.page, null);
-      const dom = await page.evaluate((sel) => { const el = document.querySelector(sel); return { from: Number(el.dataset.from), to: Number(el.dataset.to) }; }, v.chartSeries);
+      const dom = await page.evaluate((sel) => {
+        const el = document.querySelector(sel), on = document.querySelector('[data-testid="series-chip"].is-on');
+        return { from: Number(el.dataset.from), to: Number(el.dataset.to), chart: el.dataset.series,
+                 chip: on ? on.dataset.series : null, firstChip: document.querySelector('[data-testid="series-chip"]')?.dataset.series ?? null,
+                 headline: document.querySelector('[data-testid="reason-headline"]')?.textContent.trim() };
+      }, v.chartSeries);
+      // the selected series is the headline's: the alert that paged (from the export, not from view.js)
+      const headlineSeries = demo.paging_targets[String(p.page)];
+      if (dom.headline !== demo.paging_reasons[String(p.page)]) { r.ok = false; r.problems.push(`${clock} page ${p.page}: headline "${dom.headline}"`); }
+      if (dom.chart !== headlineSeries || (dom.chip !== null && (dom.chip !== headlineSeries || dom.firstChip !== headlineSeries))) {
+        r.ok = false; r.problems.push(`${clock} page ${p.page}: selected ${dom.chip ?? dom.chart}, first chip ${dom.firstChip}; the headline's series is ${headlineSeries}`);
+      }
+      r.headlineSeriesSelected = (r.headlineSeriesSelected || 0) + 1;
       const c = checkChart(await readChart(page, v.chartSvg), exp, t);
       r.checked++;
       if (dom.from !== exp.from || dom.to !== exp.to) { r.ok = false; r.problems.push(`${clock} page ${p.page}: window ${dom.from}-${dom.to}, expected ${exp.from}-${exp.to}`); }
@@ -547,7 +559,7 @@ async function checkSlider(v, ctx) {
   return r;
 }
 
-// the selected page: status line, series chips (strength order, strongest preselected, firing marks, 5 + "+N
+// the selected page: status line, series chips (paging series first and preselected, then strength order, firing marks, 5 + "+N
 // more"), the cause label, monospace vs proportional faces, headline size
 async function checkPageView(v, ctx, clocks) {
   const r = { ok: true, problems: [] };
@@ -578,7 +590,7 @@ async function checkPageView(v, ctx, clocks) {
     if (ranked.length > 1) {
       const shown = ranked.length > 5 ? ranked.slice(0, 5) : ranked;
       if (JSON.stringify(dom.chips.map((c) => c.sid)) !== JSON.stringify(shown.map((x) => x.sid))) fail(`${clock}: chips not in strength order or not the top 5`);
-      if (!dom.chips[0]?.on) fail(`${clock}: the strongest series is not preselected`);
+      if (!dom.chips[0]?.on || dom.chips[0].sid !== p.paging_target) fail(`${clock}: the paging series is not first and preselected`);
       if (dom.chips.some((c, i) => c.firing !== shown[i]?.firing)) fail(`${clock}: firing marks do not match alerts in the last 10 min`);
       const wantMore = ranked.length > 5 ? `+${ranked.length - 5} more` : null;
       if (dom.more !== wantMore) fail(`${clock}: "${dom.more}", expected "${wantMore}"`);

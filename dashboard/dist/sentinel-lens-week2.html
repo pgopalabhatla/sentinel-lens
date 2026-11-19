@@ -387,9 +387,10 @@ function chartWindow(page, t) {
   return { from, to, nowInside: t <= page.paged_at + AFTER_MS };
 }
 
-// The page's series by alert strength: the highest alert score (how far past its alert line, 1.0 for the
-// rules that are always bad), then the number of alerts, then how far the strongest one went past its line
-// (measure / line; infinite when the engine printed z=+inf), then the paging series, then the name.
+// The page's series, the one that paged first (the headline's series, preselected), then the rest by alert
+// strength: the highest alert score (how far past its alert line, 1.0 for the rules that are always bad),
+// then the number of alerts, then how far the strongest one went past its line (measure / line; infinite
+// when the engine printed z=+inf), then the name.
 function rankSeries(page, t) {
   const by = new Map();
   for (const a of page.alerts) {
@@ -402,8 +403,8 @@ function rankSeries(page, t) {
     by.set(a.target, r);
   }
   const ranked = [...by.values()].map((r) => ({ ...r, firing: r.last >= t - FIRING_MS }));
-  ranked.sort((a, b) => b.score - a.score || b.count - a.count || b.excess - a.excess
-    || (b.sid === page.paging_target) - (a.sid === page.paging_target) || (a.sid < b.sid ? -1 : 1));
+  ranked.sort((a, b) => (b.sid === page.paging_target) - (a.sid === page.paging_target)
+    || b.score - a.score || b.count - a.count || b.excess - a.excess || (a.sid < b.sid ? -1 : 1));
   return ranked;
 }
 
@@ -665,7 +666,7 @@ function renderChart(page, ui) {
     return;
   }
   const t = state.t;
-  // series by alert strength (only alerts up to the clock); the strongest is preselected
+  // the series that paged first (the headline's, preselected), then the rest by alert strength (alerts up to the clock)
   const ranked = rankSeries(page, t);
   const sid = page.series.includes(state.series) ? state.series : ranked[0].sid;
   const info = demo.series_index[sid], seasonal = info.rule === "seasonal";

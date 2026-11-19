@@ -997,3 +997,5 @@ Each new check failed on a broken page first:
 All checks pass; play-through 401 ms/tick. Screenshots are now full pages.
 
 Tests: `pytest` (default, `.venv`) 476 passed, in 87 s. `pytest -m ui` 1 passed in 123 s.
+
+**Follow-up: the headline's series first.** Preselecting the strongest series put a different series on the chart than the one the headline names. On page 3 that was worker-1 GC time under "trino-worker-0 CPU 6.3x expected". The series that paged now comes first and is preselected, and the other chips keep the strength order. A new check selects every page (29 selections) and requires the selected chip and the charted series to equal the paging alert's series, taken from the export rather than from `view.js`. The old order fails it on page 3. All checks pass.

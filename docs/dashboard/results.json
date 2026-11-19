@@ -1,14 +1,14 @@
 {
  "target": "dashboard (static HTML + ECharts)",
  "browser_timezone": "America/Los_Angeles",
- "at": "2026-11-19T22:40:29.578Z",
+ "at": "2026-11-19T22:48:55.337Z",
  "first_render": {
   "runs_ms": [
-   1488,
-   1321,
-   1206
+   2190,
+   1819,
+   2354
   ],
-  "median_ms": 1321
+  "median_ms": 2190
  },
  "clocks": [
   {
@@ -372,7 +372,8 @@
  "window_all_pages": {
   "ok": true,
   "problems": [],
-  "checked": 29
+  "checked": 29,
+  "headlineSeriesSelected": 29
  },
  "layout": [
   {
@@ -409,7 +410,7 @@
  ],
  "play_through": {
   "simulated_hours": 168,
-  "wall_ms": 67295,
+  "wall_ms": 67306,
   "ideal_ms": 67200,
   "ms_per_tick": 401,
   "final_page_count": 13,

@@ -397,8 +397,9 @@ The keys are space for play/pause, N for next page and R for the answer key. Eve
 - **The chart**: one series of the page, as 5-minute means.
   - **The window** runs from 3 h before the page to 2 h after it, cut off at the clock, so the page is
     always in view. A "now" line marks the clock while it is inside the window.
-  - **Which series**: chips list the page's series by alert strength. The strongest is preselected; a
-    dot marks series alerting in the last 10 minutes; 5 are shown, with "+N more".
+  - **Which series**: the series that paged (the headline's) is preselected and its chip comes first.
+    The other chips follow by alert strength. A dot marks series alerting in the last 10 minutes; 5
+    chips are shown, with "+N more".
   - **What it shows**: for a seasonal series, the expected value, a +/- wobble band and the hot line
     (expected + 6 x wobble). Markers show the page's alerts, the page-out, and changes (deploys and the
     like, from when they were streamed).

@@ -246,7 +246,7 @@ function renderChart(page, ui) {
     return;
   }
   const t = state.t;
-  // series by alert strength (only alerts up to the clock); the strongest is preselected
+  // the series that paged first (the headline's, preselected), then the rest by alert strength (alerts up to the clock)
   const ranked = rankSeries(page, t);
   const sid = page.series.includes(state.series) ? state.series : ranked[0].sid;
   const info = demo.series_index[sid], seasonal = info.rule === "seasonal";

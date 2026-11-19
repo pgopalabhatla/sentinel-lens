@@ -45,13 +45,15 @@ def test_window_is_anchored_on_the_page_and_capped_at_the_clock():
     assert run(f"V.chartWindow({json.dumps(p)}, {P})") == {"from": P - 3 * H, "to": P, "nowInside": True}
 
 
-def test_series_ranked_by_score_then_count_then_excess_then_paging_series():
+def test_paging_series_first_then_score_then_count_then_excess():
+    # the paging series (b) is the weakest here and still comes first: it is the headline's series
     p = page(P, [alert("b|x", P, score=0.9), alert("b|x", P + 5 * M, score=0.9), alert("b|x", P + 10 * M, score=0.9),
                  alert("c|x", P, score=1.0, measure=7), alert("d|x", P, score=1.0, measure=30),
-                 alert("e|x", P, score=1.0, measure=30), alert("a|x", P, score=1.0, measure=30)], target="a|x")
+                 alert("e|x", P, score=1.0, measure=30), alert("a|x", P, score=0.95, measure=30),
+                 alert("a|x", P, score=0.95, measure=30)], target="b|x")
     ranked = run(f"V.rankSeries({json.dumps(p)}, {P + 10 * M})")
-    assert [r["sid"] for r in ranked] == ["a|x", "d|x", "e|x", "c|x", "b|x"]       # ties: paging series first, then name
-    assert [r["count"] for r in ranked] == [1, 1, 1, 1, 3]
+    assert [r["sid"] for r in ranked] == ["b|x", "d|x", "e|x", "c|x", "a|x"]       # ties after excess: by name
+    assert [r["count"] for r in ranked] == [3, 1, 1, 1, 2]
     # firing: an alert emitted in the last 10 minutes of the clock
     assert {r["sid"]: r["firing"] for r in ranked} == {"a|x": True, "d|x": True, "e|x": True, "c|x": True, "b|x": True}
     late = run(f"V.rankSeries({json.dumps(p)}, {P + 20 * M + 1})")
@@ -59,8 +61,8 @@ def test_series_ranked_by_score_then_count_then_excess_then_paging_series():
 
 
 def test_an_infinite_z_ranks_above_a_finite_one():
-    p = page(P, [alert("a|x", P, measure=20), alert("b|x", P, measure=None)])
-    assert [r["sid"] for r in run(f"V.rankSeries({json.dumps(p)}, {P})")] == ["b|x", "a|x"]
+    p = page(P, [alert("p|x", P), alert("a|x", P, measure=20), alert("b|x", P, measure=None)], target="p|x")
+    assert [r["sid"] for r in run(f"V.rankSeries({json.dumps(p)}, {P})")] == ["p|x", "b|x", "a|x"]
 
 
 def test_status_line_from_the_newest_alert():
