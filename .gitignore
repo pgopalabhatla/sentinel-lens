@@ -1,4 +1,6 @@
 .venv/
+# the venv of the earlier Streamlit dashboard (branch dashboard-v2): Streamlit pins pandas<3
+.venv-dashboard/
 __pycache__/
 .pytest_cache/
 *.pyc
@@ -11,3 +13,5 @@ data_live/
 data_live_2/
 # triage agent transcripts (sentinel_stream/investigator.py)
 runs/
+# the dashboard's Playwright checks (dashboard/e2e)
+node_modules/

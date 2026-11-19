@@ -362,6 +362,70 @@ what the engine says with what is already written before sending anything (how a
 `pytest -m kafka` checks this through the broker: the test week gives exactly the in-process engine's
 alerts and page events, also when the consumer is killed three times on the way.
 
+## Run the demo
+
+A replay of live week 2 ([result](docs/results/live-week-2.md)) in one static web page. It needs no
+broker, no generated world, no API key, no build step and no Python packages. It reads the export
+committed in `dashboard/demo/live-week-2/`. Any static web server will do:
+
+```bash
+cd dashboard && python3 -m http.server 8600 --bind 127.0.0.1    # open http://127.0.0.1:8600/
+```
+
+Or open the single file `dashboard/dist/sentinel-lens-week2.html` (2.6 MB, committed) directly in a browser.
+It holds the page and the data. ECharts and the fonts load from their CDNs. Rebuild it with
+`python dashboard/make_single.py` after changing the page or the data. A test fails if the committed file
+is out of date.
+
+Move the clock with the slider, press Play (5 min, 15 min, 1 h or 6 h of simulated time per tick), or jump
+to the next page-out. The keys are space for play/pause, N for next page and R for the answer key. Every view is a link: `?t=2026-10-30T00:30Z&page=14&reveal=1`.
+
+- **Pages, newest first**: every page-out up to the clock, each with a one-line reason
+  ("trino-worker-0 CPU 6.3x expected") and the triage agent's current answer.
+- **The selected page**: the reason, the answer as a badge (needs human: yes / unsure / no), and then the
+  triage agent's final answer card (run 1 of 3). That card is the follow-up when there was one. It gives
+  cause, impact, evidence (collapsed) and next step. The earlier note sits collapsed below it, labelled
+  with its own answer and time. Each note appears only once the agent had written it.
+- **The chart**: one series of the page, as 5-minute means over the last 12 h. For a seasonal series it
+  also shows the expected value, a +/- wobble band and the hot line (expected + 6 x wobble). Markers show
+  the page's alerts, the page-out, and changes (deploys and the like, from when they were streamed). The
+  x axis is in UTC. On the first day, the window reaches back before the stream into the quiet-world
+  history the engine had, and a dotted line marks where the stream starts.
+- **Reveal answer key** (off by default): the attacker's injections, labelled *hidden from the system*,
+  and shading on the chart. It is the one view that shows the future of the clock. Everything else
+  shows only what existed at the clock: `ui_state(t)` in `dashboard/data.py`, ported to
+  `dashboard/shared/visibility.js`.
+
+The expected and wobble values are recomputed with the frozen detector settings, because the engine does
+not publish them. The export compares them with the numbers printed in all 705 of the engine's seasonal
+alert texts, and they agree to the print rounding. To rebuild the export (needs the broker's
+`live-week-2-*` topics and `data_live_2/`):
+
+```bash
+python scripts/posthoc/lw2_export_topics.py && python dashboard/export_demo.py && python dashboard/export_ui.py
+python dashboard/make_single.py
+```
+
+Tests:
+- `tests/test_dashboard.py`: nothing from after the clock leaks, and the page-outs equal the live scorer's.
+- `tests/test_dashboard_ui.py`: the JS port gives exactly what `data.py` gives at the same clocks.
+- `tests/test_dashboard_page.py`: the single file is current.
+- `pytest -m ui` runs the browser checks in `dashboard/e2e/check.mjs`. Setup: `npm install` and
+  `npx playwright install chromium` in `dashboard/e2e`. They check:
+  - no future data;
+  - the first card's answer equals the badge;
+  - UTC axis labels, with the markers where the labels put them, and no gap at the start of the line;
+  - page 14, then page 17 (no stale text);
+  - no truncation;
+  - the keyboard;
+  - a full play-through.
+
+  Results and screenshots: [docs/dashboard/](docs/dashboard/).
+
+This page was chosen from three builds made from one spec: Streamlit, this page, and React + Vite.
+Comparison: [docs/dashboard-compare/README.md](docs/dashboard-compare/README.md). The other two are on
+branch `dashboard-v2`.
+
 ### Inject a failure
 
 While the publisher runs it takes commands from the topic `control` and changes the readings it
@@ -414,5 +478,8 @@ dummy injection.
 | [docs/results/test-week-posthoc.md](docs/results/test-week-posthoc.md) | Post-hoc analysis: the miss, the slow detection, timing, false-alert counts |
 | [docs/live-protocol.md](docs/live-protocol.md) | The protocol of the scripted live week: scenarios, ranges, schedule, scoring rule |
 | [docs/results/live-week-1.md](docs/results/live-week-1.md) | The live-week result, as written by the single run |
+| [docs/live-week-2-protocol.md](docs/live-week-2-protocol.md) | Live week 2: frozen detector, triage agent and attacker on a new world, with predictions |
+| [docs/results/live-week-2.md](docs/results/live-week-2.md) | The live-week-2 result, as written by the single run |
+| [docs/results/live-week-2-posthoc.md](docs/results/live-week-2-posthoc.md) | Post-hoc: predictions vs result, the two misses, target naming, generic incidents |
 | [docs/dataset.md](docs/dataset.md) | The simulated platform, the files, the replay API and the scorer |
 | [docs/scope-v3.md](docs/scope-v3.md) | The project scope |

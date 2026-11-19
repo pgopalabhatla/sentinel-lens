@@ -1,0 +1,19 @@
+{
+ "stream_start": "2026-10-26 00:00:00+00:00",
+ "stream_end": "2026-11-02 00:00:00+00:00",
+ "bucket_minutes": 5,
+ "history_start": "2026-10-25 12:00:00+00:00",
+ "series": 42,
+ "page_records": 854,
+ "alerts": 841,
+ "page_outs": 13,
+ "triage_run": 1,
+ "changes": 10,
+ "expected_vs_alert_explanations_worst_relative_diff": {
+  "value": 0.004600000000000094,
+  "expected": 0.0043272727272726545,
+  "wobble": 0.043830000000000036,
+  "n": 705
+ },
+ "made_by": "dashboard/export_demo.py from runs/live-week-2/topics/ (lw2_export_topics.py) and data_live_2/"
+}

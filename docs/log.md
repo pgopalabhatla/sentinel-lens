@@ -874,3 +874,87 @@ Choices beyond the request, to defend or drop before the run:
 - `--resume "<reason>"` exists for technical failures only, reusing finished steps. A finished campaign is never re-recorded.
 
 The predictions are empty; the runner refuses until they are filled in and committed.
+
+## Nov 19, live week 2: predictions, the single run, post-hoc, and a demo dashboard
+
+**Predictions, then the run.** I filled in the seven predictions (each a number, a range and a sentence), committed them alone (`bc1619e`), and ran `--check`, which passed. Then I ran `--run-once` once, in a terminal. It exited 0 with one attempt and no resume. The result and the campaign's control stream are committed unedited (`bc78783`).
+
+**Result** ([live-week-2.md](results/live-week-2.md)): 11 injections (6 named, 5 generic; 5 noticeable, 6 subtle). 9 were detected (Wilson 0.52-0.95), and generic ones 5 of 5. Median time to detect was 15 min. There were 2 false page-outs (0.29 a day), and both also page with nothing injected. Triage was correct on 10 of 11 true pages in each of the 3 runs, with 0 dangerous answers. Total cost was USD 4.54.
+
+**Against the predictions, six of seven fell outside their ranges, all on the good side.** Every point prediction still lies inside the result's 95% interval. So the ranges were too narrow; the week does not show the predictions were wrong.
+
+**Post-hoc** ([live-week-2-posthoc.md](results/live-week-2-posthoc.md), labelled as written after the result; scripts in `scripts/posthoc/`):
+- The DAG pause (atk-004) had no observable effect: no run of `customer_agg` was due in the window, and its pods report nothing outside the 03:30 run.
+- The Flink leak (atk-010) peaked at z +4.7 and +4.8. The 5% relative floor set the wobble, so memory has to rise about 30% above expected before it goes hot, which takes 8-10 h at those rates. The leak lasted 7.
+- "Cause names the target" = 0 is mostly the rule: it reads the cause text only. The note's entities name the target on 14 of 15 pages.
+- The generic incidents were loud: 5-9 series each, at z 10-54. Only one was paged by a guardrail first, and it would still have been caught without it.
+
+**Dashboard (branch `dashboard`, not merged).** `dashboard/app.py` is a Streamlit replay of the week, with no broker. It reads a 1.8 MB export committed in `dashboard/demo/live-week-2/`.
+- Why export instead of reading the topics live: the demo then runs anywhere, and the files are fixed.
+- Why recompute expected and wobble: the engine does not publish them. The export checks them against the numbers in all 705 seasonal alert texts. The first version of that check failed by 66%. The cause was that a seasonal alert is stamped at the bucket that completed 3-of-5 persistence, but describes the most extreme reading in that window. With that matched correctly, they agree to the print rounding.
+- The rule "nothing from the future of the clock" lives in `dashboard/data.py`, apart from the UI, so it can be tested. The attacker panel is the only exception, and it is labelled.
+
+**An environment mistake, and the fix.** I first installed Streamlit into `.venv`. Its `pandas<3` pin downgraded pandas from 3.1 to 2.3.3, and packaging and pillow with it. This happened after the run, so the result is untouched. The post-hoc scripts and the export had run under 2.3.3. Re-run under 3.1 they give the same numbers, and the export's JSON files are byte-identical.
+- The old version was not recorded anywhere. I restored the newest releases uploaded before Nov 4 (`pip --uploaded-prior-to`): pandas 3.1.0, packaging 26.3, pillow 13.0.0. That is what the Nov 3 install of `requirements.txt` would have resolved. I removed the Streamlit tree.
+- The dashboard now has its own `.venv-dashboard` (gitignored).
+- Lesson: record `pip freeze` next to every frozen result. Live week 2's result does not name its package versions.
+
+Tests: `pytest` (default, `.venv`, pandas 3.1.0) 456 passed, 5 skipped (the render tests, no Streamlit there), in 80 s. In `.venv-dashboard`: `tests/test_dashboard.py` 16 passed, including the 5 render tests.
+
+## Nov 19, dashboard v2: three variants from one spec, one test, no winner picked
+
+Branch `dashboard-v2`, off `dashboard`. The detector, the engine, the frozen triage and attacker agents and `data/` are untouched. Write-up with screenshots and numbers: [dashboard-compare/README.md](dashboard-compare/README.md).
+
+**Why three.** v1 had two visible bugs: text from the previous page showing under the next one (page 14's chg-0007 under page 17), and a time axis in the browser's local time. It was also hard to read under pressure. Before choosing a UI stack I wanted a like-for-like comparison: one design spec, one data export, one test script, and three builds. The variants are Streamlit restyled (A), one static HTML/JS page with ECharts (B), and React + Vite + Recharts (C).
+
+**One rule, one export.** `ui_state(t)` in `dashboard/data.py` is everything the system's panels may show at `t`. A calls it directly. B and C use a port, `dashboard/shared/visibility.js`, and a pytest runs the port in Node and checks it gives exactly the Python output at the 7 clocks of `test_dashboard.py`. `dashboard/export_ui.py` writes `demo.json` + `series.json` with nothing filtered for a clock, and gives byte-identical output under pandas 2.3 and 3.1. Two data fixes came with it. The export now carries the change log, visible from its stream record, a minute after the change, which is when the triage agent could see it. And non-finite numbers load as null: 55 alerts have z = +inf, which browsers refuse in JSON.
+
+**One test.** `dashboard/e2e/compare.mjs` (Playwright) starts each variant and drives it through the same URL and DOM contract, in a browser set to Los Angeles time. It covers: screenshots, no future data, chart labels UTC 24 h with markers where the labels put them, page 14 then 17, no truncation, the answer key, first render and a play-through. It reads the chart from the SVG rather than any library's API, so the same check applies to Vega, ECharts and Recharts. I broke B four ways to see each check fail: local time, stale detail, ellipsis CSS, a 6 h leak. The stale-content check missed the first time, because it read only the first detail element; it now reads the whole column.
+
+**Result.** All three pass every check. The differences are elsewhere:
+- Play-through at 1 h/tick (168 ticks, target 400 ms each): A ran 518-524 ms/tick, because every tick is a full Streamlit rerun. B and C ran 400 ms/tick.
+- First render, over two runs: A 0.89-0.92 s, B 0.99-1.37 s, C 1.08-1.11 s. These come from one machine, with fonts and ECharts fetched over the network, so they are noisy.
+- Own code: A 393 lines, B 239, C 285.
+- Dependencies: A needs its own 554 MB venv. B installs nothing. C has 90 npm packages and a build step.
+
+**Found in Streamlit, each now tested.**
+- A keyed container does not remount. The page text was replaced, but React reused the `<details>` elements, so page 14's opened evidence was still open on page 17. `st.html` fixes it. The page 14 then 17 check now also requires collapsed evidence on arrival.
+- A numeric domain on a `utc` time scale draws nothing in Streamlit's bundled Vega-Lite. ISO-string bounds work.
+- `labelFlush` moved the edge labels 11 px off their ticks.
+- `AppTest` cannot rerun a script that has `st.pills` on it, so the series picker is a radio styled as chips.
+
+Choices to defend:
+- **A's chart stays Altair/Vega** rather than a custom component. It is the Streamlit-native path, so the comparison shows Streamlit as people would use it.
+- **The Streamlit variant keeps its own Python formatting** (about 15 lines) rather than sharing the JS one. The visibility rule is the only shared logic that matters, and it is tested.
+- **B's one-file build is a 37-line concatenation script, not a bundler.** The served page needs no build. The single file exists only for publishing.
+- **v1 (`dashboard/app.py`) is kept unchanged** as the baseline. I did not re-measure it with the new script, which needs the new DOM contract.
+
+Tests: `pytest` (default, `.venv`) 469 passed, 11 skipped (A's chart and AppTest tests, no Streamlit there), in 83 s. In `.venv-dashboard`: the dashboard tests (`test_dashboard.py`, `test_dashboard_ui.py`, `test_dashboard_variants.py`) 35 passed. `pytest -m ui` (the Playwright comparison of all three) 1 passed in 5 min 6 s.
+
+## Nov 19, the dashboard: B chosen, polished, and made the one on main
+
+Branch `dashboard-b`, off `dashboard-v2`, merged to main. `dashboard-v2` stays as it was: the three-variant snapshot the comparison page refers to.
+
+**Why B.** It has the same look as C with the least code (239 lines of its own). It needs no build step and no server process, any static server or a file will do. It played at the target 400 ms per tick, where Streamlit managed about 520. And it can be one shareable file.
+
+**Polish.**
+- **Triage panel.** The final answer card comes first: the follow-up when there is one. Earlier notes sit collapsed below it, each labelled with its own answer and time. This is the answer a responder acts on, and it now sits right under the badge.
+- **No gap at the start of the week.** The export now keeps the 12 h of quiet-world history before the stream for the shown series. A dotted "stream starts" line marks the boundary. I exported the history rather than starting the axis at the stream start, because that history is what the engine had: it is the baseline the first alerts were measured against. History is before every clock, so the no-future rule is unchanged. A test checks the first window is complete.
+- **Keyboard.** Space plays and pauses, N goes to the next page, R toggles the answer key. A small hint sits by the slider. The keys do nothing while you type in a field or hold a modifier. Space is taken over on a focused button, so it doesn't also click that button.
+
+**Checks.** `dashboard/e2e/check.mjs` is the comparison script cut down to the one page. It adds four checks:
+- the first card's answer equals the headline badge;
+- the chart line starts at the window's left edge, and the "stream starts" label appears exactly when the stream start is in the window;
+- the keyboard works;
+- after a page switch, nothing is left expanded.
+
+I broke the page twice to see two of these fail. With the first note on top, the first-card check failed. With the history dropped, the line started 809 px in. All checks pass; play-through 401 ms/tick ([docs/dashboard/](dashboard/README.md)).
+
+**Main now has** `dashboard/index.html`, `app.js` and `shared/`, plus the data side (`data.py`, `export_demo.py`, `export_ui.py`). It also has the committed one-file build `dashboard/dist/sentinel-lens-week2.html` (2.6 MiB); a test fails if it is out of date. Removed from main:
+- variants A and C;
+- the v1 Streamlit app;
+- `requirements-dashboard.txt` and the Streamlit tests.
+
+The demo no longer needs `.venv-dashboard`. `docs/dashboard-compare/` stays, with a line naming B as chosen and why.
+
+Tests: `pytest` (default, `.venv`) 471 passed, in 82 s. `pytest -m ui` (the browser checks) 1 passed in 99 s.

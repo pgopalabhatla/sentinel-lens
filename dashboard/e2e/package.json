@@ -1,0 +1,12 @@
+{
+  "name": "sentinel-lens-dashboard-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser checks for the dashboard (dashboard/e2e/check.mjs)",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}
