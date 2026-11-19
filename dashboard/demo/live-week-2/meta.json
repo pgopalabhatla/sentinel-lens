@@ -7,6 +7,7 @@
  "alerts": 841,
  "page_outs": 13,
  "triage_run": 1,
+ "changes": 10,
  "expected_vs_alert_explanations_worst_relative_diff": {
   "value": 0.004600000000000094,
   "expected": 0.0043272727272726545,

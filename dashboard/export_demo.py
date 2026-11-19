@@ -9,6 +9,9 @@ What is written (all from the recorded run; nothing is re-run):
     pages.json        the consumer's page records (opened / alert_added / merged / paged)
     alerts.json       every alert the engine emitted, with its demoted flag
     triage_r1.json    triage run 1: notes, follow-ups and link records, trimmed to what the panel shows
+    changes.json      the change log as streamed (stream v2 'changes' records), each change with the stream
+                      record's time as `streamed_at`: the system (the triage agent's recent_changes) sees a
+                      change from then, not from the change's own `ts`
     series.csv.gz     for every series that appears in a page: 5-minute means over the 7-day stream, and
                       for seasonal series the expected value and wobble, recomputed with the frozen
                       seasonal_scores and the router's per-series settings (history, abs_floor)
@@ -21,6 +24,7 @@ worst disagreement (tests/test_dashboard.py asserts it).
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import sys
 from pathlib import Path
@@ -49,9 +53,12 @@ def main() -> None:
     for name, obj in (("answer_key", key), ("pages", pages), ("alerts", alerts), ("triage_r1", triage)):
         (OUT / f"{name}.json").write_text(json.dumps(obj, default=str))
 
+    telemetry = load("telemetry")
+    changes = [{**c, "streamed_at": r["ts"]} for r in telemetry if r.get("type") == "changes" for c in r["changes"]]
+    (OUT / "changes.json").write_text(json.dumps(changes, default=str))
+
     routes = route_series(DataSource(DATA).series()).set_index("series_id")
     series_ids = sorted({r["alert"]["target"] for r in pages if r["kind"] != "paged"})
-    telemetry = load("telemetry")
     frames = []
     for sid in series_ids:
         s = metric_series(sid, telemetry)
@@ -65,13 +72,14 @@ def main() -> None:
         df["series_id"], df["rule"] = sid, route["rule"]
         frames.append(df.rename_axis("ts").reset_index())
     series = pd.concat(frames, ignore_index=True)
-    with gzip.open(OUT / "series.csv.gz", "wt") as f:
+    # mtime=0: the gzip header carries no write time, so re-running the export gives the same bytes
+    with gzip.GzipFile(OUT / "series.csv.gz", "wb", mtime=0) as gz, io.TextIOWrapper(gz, encoding="utf-8") as f:
         series.to_csv(f, index=False, float_format="%.6g")
 
     worst = check_against_alerts(series, alerts)
     meta = {"stream_start": str(START), "stream_end": str(END), "bucket_minutes": 5,
             "series": len(series_ids), "page_records": len(pages), "alerts": len(alerts),
-            "page_outs": sum(r["kind"] == "paged" for r in pages), "triage_run": 1,
+            "page_outs": sum(r["kind"] == "paged" for r in pages), "triage_run": 1, "changes": len(changes),
             "expected_vs_alert_explanations_worst_relative_diff": worst,
             "made_by": "dashboard/export_demo.py from runs/live-week-2/topics/ (lw2_export_topics.py) and data_live_2/"}
     (OUT / "meta.json").write_text(json.dumps(meta, indent=1))
