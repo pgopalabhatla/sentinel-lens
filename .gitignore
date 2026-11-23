@@ -15,3 +15,8 @@ data_live_2/
 runs/
 # the dashboard's Playwright checks (dashboard/e2e)
 node_modules/
+# optional agent skills, installed locally and not committed (see CLAUDE.md, "Dev tooling")
+.agents/
+.claude/skills/
+.claude/agents/
+skills-lock.json

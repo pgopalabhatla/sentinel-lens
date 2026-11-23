@@ -61,6 +61,12 @@ Score a detector: `from sentinel_sim.evaluate import evaluate_detections`; pass 
 columns `ts` and `target` (a series_id, or an entity like `dag:daily_orders`).
 Metrics: incident recall, alert precision (before and after feedback), median time to detect.
 
+## Dev tooling
+The Impeccable and grill-me agent skills are optional and not committed (`.agents/`, `.claude/skills/`,
+`.claude/agents/` and `skills-lock.json` are gitignored). Reinstall: `npx impeccable install` and
+`npx skills add https://github.com/mattpocock/skills --skill grill-me`. grill-me hands off to `grilling`,
+installed alongside it (same command with `--skill grilling`).
+
 ## Working rules
 - Small, tested commits. Write a unit test on synthetic series (spike, step, drift) for each detector.
 - Explain your choices briefly as you build (why this method, why this threshold). The author needs to
