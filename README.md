@@ -18,8 +18,8 @@ This phase built and validated the **detection core**. That covers explainable s
 | False alerts, compared with a simple baseline detector | **641 → 45 (93% fewer)** |
 | Share of alerts that were real (precision) | **0.26 → 0.79** (real ÷ (real + false): 169 of 214; the 10 alerts on a planned traffic burst count as neither) |
 | Raw alerts grouped into pages to an engineer | **1,445 → 24** in one week (batch result) |
-| False pages per day, in a live week against an AI attacker | **0.29** |
-| Results held on additional held-out weeks | **12 of 14** and **9 of 11** detected |
+| False pages per day, in the Attacker live week | **0.29** |
+| Results held on additional held-out weeks | **12 of 14** (Scripted live week) and **9 of 11** (Attacker live week) detected |
 
 The AI has no say in paging. Pages come from plain statistics that I can check by hand, with no model involved. After a page goes out, a triage agent examines it with read-only tools and writes a brief note: whether a human needs to look, the likely cause, the impact, and a next step. If the triage agent is wrong, the page has already gone out.
 
@@ -93,13 +93,13 @@ The full design is too large to fit into one project, so I implemented it in pie
 
 | Part of the overall design | In this phase | Status |
 | --- | --- | --- |
-| Common event model and routing | Every metric routed to the right rule | ✅ Built |
-| Detectors per event type | Seasonal baseline, guardrails, schedule watcher, job-run baseline | ✅ Built |
-| Group anomalies into incidents | Correlator using time and system topology | ✅ Built |
-| Learn from engineer feedback | Noisy alert types demoted | ✅ Built |
-| AI explanation on each page | Advisory triage note | ✅ Built |
-| Full AI root cause analysis and fixes | Deeper diagnosis per product | ⏳ Next phase |
-| Connect to real data platforms | Prometheus and Kubernetes adapters | ⏳ Next phase |
+| Common event model and routing | Every metric routed to the right rule | Built |
+| Detectors per event type | Seasonal baseline, guardrails, schedule watcher, job-run baseline | Built |
+| Group anomalies into incidents | Correlator using time and system topology | Built |
+| Learn from engineer feedback | Noisy alert types demoted | Built |
+| AI explanation on each page | Advisory triage note | Built |
+| Full AI root cause analysis and fixes | Deeper diagnosis per product | Next phase |
+| Connect to real data platforms | Prometheus and Kubernetes adapters | Next phase |
 
 Everything in this phase was validated on simulated data (see [section 6](#6-how-it-was-validated)).
 
@@ -173,7 +173,7 @@ Two more routing settings:
 
 ### 5.5 What an alert looks like
 
-Every alert is a comparison anyone can check against a chart. Here is a real alert from the triage development week. During an injected heavy Trino query (inj-05, scenario `trino_heavy_query`), the JVM heap of the Trino worker `trino-worker-1`, which normally sits around **55%** at that hour, read **95%**, so the engineer reads:
+Every alert is a comparison anyone can check against a chart. Here is a real alert from the Scripted live week (the triage agent's development set). During an injected heavy Trino query (inj-05, scenario `trino_heavy_query`), the JVM heap of the Trino worker `trino-worker-1`, which normally sits around **55%** at that hour, read **95%**, so the engineer reads:
 
 > **"jvm_heap_used_ratio (trino-worker-1) is 1.7x expected for this time of day (0.949 vs 0.554 +/- 0.028, z=+14.2; ...)"**
 
@@ -224,6 +224,10 @@ This was repeated on **three different weeks that were never used for tuning.** 
 
 Three terms used below: **held-out** means the week was kept aside and never used for tuning. **Batch** means the whole week was scored at once from saved files, with each alert stamped at the start of the 5-minute reading it covers. **Live-timed** means each alert is timed when the streaming engine could actually know it, up to 4 minutes later, when that reading is complete.
 
+Scripted live week = live week 1, Attacker live week = live week 2 in the reference section below and in docs/results.
+
+The two live weeks are separate generated worlds (seeds 11 and 13), each 35 quiet days (28 of history, then the streamed week), run over the same simulated dates, Oct 26 to Nov 2. Their incidents were injected on top.
+
 ### Noise reduction on the held-out test week
 
 | Version of the system | False alerts | Incidents detected |
@@ -241,16 +245,19 @@ The live streaming engine sends 29 pages on the same week (post-hoc analysis; it
 
 The training weeks (Oct 5-18) are where all tuning happened and are not scored.
 
-| | Test week (offline, run once) | Live week 1 (scripted incidents) | Live week 2 (Attacker Agent) |
+| | Test week (offline, run once) | Scripted live week | Attacker live week |
 | --- | --- | --- | --- |
 | How incidents were created | Simulator | Scripted injections | Invented by the Attacker Agent |
+| Role | Held-out test, batch | Held-out test for detection; development set for the triage agent | Final held-out test for detection and triage |
 | Incidents detected | **9 of 10** | **12 of 14** | **9 of 11** |
 | False pages per day | 1.14 | 0.57 | **0.29** |
 | Median time to detect | 13 min | 12 min | 15 min |
 
 The test-week false pages per day (1.14) is the pre-registered batch figure; the live streaming engine gives 1.57 on the same week (29 pages, 11 false). The time-to-detect row is live-timed in all three columns (when the streaming engine could know); the batch figure for the test week is 10.0 min.
 
-In live week 2, all 5 of the Attacker Agent's own designs were caught, 9 of 11 overall; both misses were subtle versions of pre-built scenarios, and one of them had no observable effect. The triage agent said "needs a human" on 10 of 11 real pages, never told the engineer to ignore a real incident, and gave the same answers across three separate runs.
+What was missed: in the test week, INC-015 (a Trino queue that normally sits at zero never showed enough readings above the 6-item minimum change); in the Scripted live week, two slow Flink state leaks (inj-04, inj-08) that stayed under the roughly 30% memory rise needed to alert; in the Attacker live week, another slow Flink leak (atk-010, same limit) and a paused DAG (atk-004) with no run due during the pause, so nothing observable changed.
+
+In the Attacker live week, all 5 of the Attacker Agent's own designs were caught, 9 of 11 overall; both misses were subtle versions of pre-built scenarios, and one of them had no observable effect. The triage agent said "needs a human" on 10 of 11 real pages, never told the engineer to ignore a real incident, and gave the same answers across three separate runs.
 
 ---
 
@@ -258,11 +265,8 @@ In live week 2, all 5 of the Attacker Agent's own designs were caught, 9 of 11 o
 
 | Limitation | Why it happens | Plan |
 | --- | --- | --- |
-| **Slow memory leaks** are caught late or missed | Memory must be about 30% above normal to count as unusual, and a slow leak stays under that for hours | Add a trend rule that notices steady growth |
-| **Quiet, low-count metrics** caused the one test-week miss | The rule that ignores small changes in count-like metrics, which removed many false alarms, also hid a small real rise | Revisit with more data |
-| **Small samples and simulated data** | Each test week had about ten incidents, and nothing has run on a real company system yet | Connect to real data |
-| **Triage doesn't yet reduce pages** | The safety guard means the agent answers "unsure" rather than "no" on false pages | Give it alert history so it can safely dismiss noise |
 | **Feedback was simulated** | The feedback labels were the scorer's own verdicts on training-week alerts. No engineer labeled any alert. | Collect labels from real engineers |
+| **Simulated data only** | Nothing has run on a real company system | Connect to real data |
 
 ---
 
@@ -294,7 +298,7 @@ In live week 2, all 5 of the Attacker Agent's own designs were caught, 9 of 11 o
 
 ## 11. See it in action
 
-The dashboard replays live week 2 (simulated clock Oct 26 to Nov 2; the run itself was on Nov 19, 2026, the incidents invented by the Attacker Agent) in 5-minute steps (Play moves 5 min, 15 min, 1 h or 6 h per tick), showing only what the system knew at each moment:
+The dashboard replays the Attacker live week (simulated clock Oct 26 to Nov 2; the run itself was on Nov 19, 2026, the incidents invented by the Attacker Agent) in 5-minute steps (Play moves 5 min, 15 min, 1 h or 6 h per tick), showing only what the system knew at each moment:
 
 - **Open** `dashboard/dist/sentinel-lens-week2.html` in a browser. It's one file, with no server, setup or API key, but it needs an internet connection (ECharts and fonts load from CDNs).
 - **Play** the week, or press **N** to jump to the next page.
