@@ -1016,3 +1016,7 @@ The check is stronger in three ways:
 Each new check was shown to fail: a line-height of 0.5 overflowed the box, and the counter pushed 40 px up left the viewport. Since the original clipping was never reproduced, it is not confirmed that these were its cause. A screenshot of it, with the browser and zoom level, would settle that.
 
 Tests: `pytest` 476 passed. Browser checks: all pass.
+
+## Nov 24, README rewrite
+
+README replaced by the executive overview, followed unchanged by the old README from "Reference: the router, as a flowchart" to the end (byte-identical, checked with `cmp`); old README archived as `docs/archive/README-previous.md`, CLAUDE.md pointer updated. Every number in the new top part was checked against its source file. Corrections to the draft: the dashboard replays live week 2, not the test week; the test week's 13 min time to detect is live-timed (batch 10.0) and its 1.14 false pages a day is batch (live 1.57); 1,445 raw alerts became 24 pages in batch, 29 live; live week 2 caught 5 of 5 of the attacker's own designs, 9 of 11 overall; the heap example is now a real alert (1.7x, 0.949 vs 0.554); a limitations row says the feedback labels were the scorer's verdicts and no engineer labeled an alert; INC-014 is disclosed in the README (8 of 9 without it). Added a "Run it yourself" section. No code, data, results or frozen tags touched.
