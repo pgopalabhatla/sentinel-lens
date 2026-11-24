@@ -62,7 +62,7 @@ The long-term goal is one system that works across all data platform products. I
 
 The design treats every product the same way: each product's metrics are mapped to a shared set of event types, and detection works on those event types.
 
-![Overview: products (Kafka, Spark, Flink, Trino, Airflow) feed source plugins that map their metrics to shared event types; the common event model (workload, canonical, product-specific) feeds detection, then correlation into incidents, an AI explanation, and engineer labels that feed back into detection.](docs/diagrams/overview.svg)
+<p align="center"><img src="docs/diagrams/overview.svg" width="360" alt="Overview: products (Kafka, Spark, Flink, Trino, Airflow) feed source plugins that map their metrics to shared event types; the common event model (workload, canonical, product-specific) feeds detection, then correlation into incidents, an AI explanation, and engineer labels that feed back into detection."></p>
 
 **The common event model** has three layers:
 
