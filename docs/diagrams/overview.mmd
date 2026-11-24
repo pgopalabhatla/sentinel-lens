@@ -1,4 +1,4 @@
-flowchart LR
+flowchart TB
     P["Products<br/>Kafka · Spark · Flink · Trino · Airflow"] --> M["Source plugins<br/>map each product's metrics<br/>to shared event types"]
     M --> E["Common event model<br/>1. Workload<br/>2. Canonical<br/>3. Product-specific"]
     E --> D["Detect<br/>one detector per event type"]
