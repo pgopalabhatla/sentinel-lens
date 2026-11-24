@@ -324,29 +324,7 @@ If something fails:
 The first "yes" wins. Names are the constants in `sentinel_lens/router.py` (the two metric lists
 live in `sentinel_lens/detectors/guardrails.py`).
 
-```mermaid
-flowchart TD
-    S["A series from the catalog<br/>(metric, unit, default_detector)"] --> Q1{"Q1: metric in<br/>FLAT_COUNTER_METRICS?"}
-    Q1 -- yes --> R1["counter_rule<br/>any increase is an alert"]
-    Q1 -- no --> Q2{"Q2: metric in<br/>ZERO_GAUGE_METRICS?"}
-    Q2 -- yes --> R2["above_zero<br/>any value above 0 is an alert"]
-    Q2 -- no --> QS{"Optional: saturation flag on AND<br/>metric in SATURATION_METRICS?<br/>The flag is off by default"}
-    QS -- yes --> RS["saturation forecast<br/>not part of the evaluated system"]
-    QS -- no --> Q3{"Q3: default_detector ==<br/>seasonal_baseline?"}
-    Q3 -- yes --> R3["seasonal"]
-    Q3 -- no --> Q4{"Q4: default_detector in<br/>SEASONAL_FALLBACK?"}
-    Q4 -- yes --> R4["seasonal, marked as fallback"]
-    Q4 -- no --> E["error: unknown detector<br/>nothing is guessed"]
-    R3 --> P1{"metric in<br/>METRIC_MIN_CHANGE?"}
-    R4 --> P1
-    P1 -- yes --> M1["min_change = that entry"]
-    P1 -- no --> P2{"unit in COUNT_UNITS?"}
-    P2 -- yes --> M2["min_change = 6"]
-    P2 -- no --> M3["min_change = 0"]
-    M1 --> F["history = day_type<br/>absolute floor = min_change / 6"]
-    M2 --> F
-    M3 --> F
-```
+<p align="center"><img src="docs/diagrams/router.svg" width="840" alt="Router flowchart: a catalog series (metric, unit, default_detector) goes through questions in order, and the first yes picks its rule. Q1: metric in FLAT_COUNTER_METRICS gives counter_rule, any increase is an alert. Q2: metric in ZERO_GAUGE_METRICS gives above_zero, any value above 0 is an alert. Optional: with the saturation flag on (off by default) and the metric in SATURATION_METRICS, the saturation forecast, not part of the evaluated system. Q3: default_detector equals seasonal_baseline gives seasonal. Q4: default_detector in SEASONAL_FALLBACK gives seasonal, marked as fallback. Otherwise an error: unknown detector, nothing is guessed. For seasonal series, min_change is the METRIC_MIN_CHANGE entry if there is one, else 6 if the unit is in COUNT_UNITS, else 0; then history = day_type and absolute floor = min_change / 6."></p>
 
 | Constant | Value | Series it catches |
 | --- | --- | --- |
