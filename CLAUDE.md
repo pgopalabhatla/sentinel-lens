@@ -81,5 +81,6 @@ installed alongside it (same command with `--skill grilling`).
 
 ## Pointers
 - `docs/scope-v3.md`: what's in and out
-- `README.md`: project overview, how it works and the test-week results
+- `README.md`: executive overview (approach, results across three unseen weeks, limitations), then the
+  router reference, setup, live stream and demo instructions; the previous README is in `docs/archive/README-previous.md`
 - `docs/dataset.md`: dataset, replay API and scoring details

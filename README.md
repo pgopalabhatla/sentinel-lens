@@ -1,426 +1,330 @@
-# Sentinel Lens
+# Sentinel Lens: AI-Assisted Anomaly Detection for the Data Platform
 
-Anomaly detection for a data platform, built so that every alert can be explained and every
-threshold defended. A statistical detector pages an engineer. An LLM agent triages each page.
-A second LLM agent attacks the system with incidents it invents.
+**An executive overview of the approach, the implementation and the results**
 
-![The dashboard: live week 2 replayed, page 9 selected, with the triage agent's final answer and the series it paged on](docs/dashboard/2026-10-28T1340Z_1440x900.png)
+*SRE internship portfolio project · November 2026 · Code: [github.com/pgopalabhatla/sentinel-lens](https://github.com/pgopalabhatla/sentinel-lens)*
 
-## The problem
+---
 
-A data platform (Kafka, Spark, Trino, Flink and Airflow on Kubernetes) produces hundreds of metrics,
-and simple alerting on them is noisy: a naive detector on this project's data raises about 125 alerts
-a day, three quarters of them false. People stop reading alerts like that. The goal here is to catch
-real incidents early, page an engineer rarely for things that are not incidents, and say in plain
-language why each alert fired ("memory is 1.3x expected for this time of day").
+## Executive summary
 
-## Results at a glance
+Sentinel Lens reads the metrics and job runs of a data platform and flags readings that are far from their usual value for that hour and day. It groups related alerts into one page for the on-call engineer and says in one line why it fired. I built it because alerting on every metric buries engineers in false alarms. The long-term aim is AI-assisted anomaly detection across every data platform product, so SRE teams write fewer alert rules and find causes faster.
 
-The system was frozen and evaluated three times, each time on data it had never seen. Each time the
-protocol and my predictions were committed first, the run was done once, and the output was saved
-unedited.
+This phase built and validated the **detection core**. That covers explainable statistical detectors, grouping alerts into incidents, a feedback loop that learns from engineers, and an AI triage note on each page.
 
-| | Test week (batch) | Live week 1 (Kafka stream) | Live week 2 (Kafka stream + agents) |
-|---|---|---|---|
-| Incidents | 10 from the simulator | 14 scripted injections | 11 invented by the attacker agent |
-| Detected | 9 of 10 | 12 of 14 | 9 of 11 (Wilson 95%: 0.52-0.95) |
-| False pages per day | 1.14 (1.57 with live timing) | 0.57 | 0.29 |
-| Median time to detect | 13 min (scorer's timing) | 12 min | 15 min |
-| Triage agent, true pages | - | (development set) | 10 of 11 answered "needs a human", 0 dangerous "no", same answers in 3 runs |
-
-The naive detector also found all 10 test-week incidents, but with 641 false alerts. The final
-system had 45 false alerts and 8 false pages. The weak spot is slow memory leaks: missed twice in
-live week 1, and again in live week 2. Details, limits and what did not work are below.
-
-## How it works
-
-```
-                      attacker agent (LLM) --control--> injector
-                                                            |
- simulated world --> publisher --telemetry (Kafka)--> engine: router -> detectors -> alert record -> correlator -> feedback
-                                                                                                              |
-                                                                        pages <-------------------------------+
-                                                                          |
-                                                    triage agent (LLM, one per page) --> note: needs a human? why?
-```
-
-The detection side (router to feedback) has no LLM in it. It is plain statistics, so every alert is
-explained by numbers and every threshold was chosen on training data. The two agents sit on either side
-of it. The attacker is there to make the tests harder, and the triage agent to make each page quicker to act on.
-Neither can change what the detector does.
-
-**Simulator** (`sentinel_sim/`). There is no real cluster. A generator produces 28 days of 1-minute
-telemetry for a simulated platform: 164 metric series, logs, job runs, and 23 injected incidents with
-ground-truth labels. Detectors read it only through `DataSource`, which has a clock: nothing after
-"now" is visible, so no detector can use the future. See [docs/dataset.md](docs/dataset.md).
-
-**Router** (`sentinel_lens/router.py`). Decides which rule scores each series, from the metric name
-and the series catalog, and with which settings. One detector for everything does not work: a restart
-counter, a queue length and a CPU reading need different treatment. The flowchart is under
-"Reference" near the end.
-
-**Detectors** (`sentinel_lens/detectors/`).
-
-- *Seasonal baseline with persistence* (`seasonal.py`, `persistence.py`). Each 5-minute reading is
-  compared with the same time of day on the last 5 days of the same type (weekday or weekend). The
-  median of those is "expected"; the typical spread around it is the "wobble" (1.4826 x the median
-  absolute deviation, never less than 5% of expected or a per-metric minimum). A reading more than 6
-  wobbles from expected is "hot", and an alert fires only when 3 of the last 5 readings are hot, so
-  a single blip stays quiet.
-- *Guardrail rules* (`guardrails.py`). Some things are always bad and need no baseline: a pod
-  restart, a failed Flink checkpoint, an under-replicated Kafka partition. Any increase of those
-  counters, or any value above zero, alerts at once, on 1-minute readings.
-- *Schedule watcher* (`schedule.py`). A paused job produces no metric at all, so the only signal is
-  a run that should have happened. It alerts when a scheduled run has not started 10 minutes after
-  its time, has not finished by its SLA, or failed.
-- *Job-run baseline* (`job_runs.py`). A run can succeed, inside its SLA, and still take twice as
-  long as usual. Each finished run's duration is compared with that job's own earlier runs, using
-  the same expected-and-wobble maths.
-
-**Alert record** (`sentinel_lens/alerts.py`). Every detector's output becomes one record: time,
-target, detector, score, direction, explanation. The score is severity (how far past its alert line
-the reading is), not the probability that the alert is real; rules that are always bad score 1.0.
-
-**Correlator** (`sentinel_lens/correlator.py`). One problem raises many alerts, and an engineer
-should be paged once. Two alerts are linked when they are at most 15 minutes apart *and* their
-entities are at most one step apart in the platform's relationship graph (a pod and its consumer
-group, say). A connected group of alerts is one page.
-
-**Feedback** (`sentinel_lens/feedback.py`). Labels ("real" / "false") are counted per kind of alert,
-for example (seasonal, cpu_throttling). When a kind has at least 10 labels and fewer than about one
-in four is real, it is demoted: its alerts stay attached to pages as context, but a page made only
-of demoted alerts no longer pages anyone. Labels are simulated from the scorer's verdicts.
-
-**Streaming engine and Kafka** (`sentinel_stream/`). The same detectors, run one minute at a time on
-a Kafka topic (Redpanda in Docker) instead of a batch file. Replayed over the test week, the engine
-produces exactly the batch pipeline's alerts. It writes each alert and page event once, even when the
-consumer is killed and restarted (`pytest -m kafka` checks both).
-
-**Injector** (`sentinel_stream/injector.py`). Changes the stream's readings while it runs. It offers
-seven named failure scenarios, plus generic effects on any series (add or multiply; flat, ramp or decay).
-Every effect is checked against what the series can physically be: a ratio stays in 0-1, memory stays
-under the pod's limit, a counter only goes up. What was injected goes to a hidden `answer_key` topic.
-The engine never reads that topic; only the scorer does.
-
-**Triage agent** (`sentinel_stream/investigator.py`, `dispatcher.py`). When the engine pages, one fresh
-Claude agent investigates that page. It sees what existed at paging time, through read-only tools:
-the page's alerts, metrics, topology, logs, Kubernetes events, recent changes and consumer lag. The same
-tools are also served over MCP. It writes a note: does this need a human (yes / no / unsure), cause,
-impact, evidence and next step. Ten minutes later it writes one follow-up. Choices I can defend:
-- **Advisory only.** The note never changes paging, so a wrong note cannot hide an incident.
-- **A guard in code, not only in the prompt.** "No" is accepted only when the agent names a cause and
-  sees no impact; otherwise it becomes "unsure". It was added after the agent answered "no" on two
-  real crash loops in development.
-- **Hard budgets per page** (tool calls, time, tokens), and the cost is reported.
-- **Frozen before evaluation** (tag `triage-freeze-v1`). A test fails on any change to its prompt,
-  tools or code.
-
-**Attacker agent** (`sentinel_stream/attacker.py`). A second Claude agent invents incidents during a
-campaign, through the injector's tools. It is woken every simulated hour and decides whether to inject.
-An injection is either a named scenario or its own combination of effects. It is blind to the detector: it never reads alerts, pages, triage notes or
-the answer key, and tests check that both in the code and through the broker. Its budget is enforced in
-code:
-- 1-3 injections a day, starting at least 3 h apart;
-- it must look at a series' normal behaviour before touching it;
-- named scenarios may be at most 60% of the campaign, so it has to invent.
-
-A campaign is recorded once and replayed exactly for scoring. Frozen as `attacker-freeze-v2`.
-
-**Dashboard** (`dashboard/`). A replay of live week 2 in one static page: the clock, the pages as they
-fired, the triage agent's answer, and the chart behind each page. It never shows anything the system
-could not have known at the clock. That rule lives in one tested function, `ui_state(t)`, with a JS
-port that is tested to give identical output. It was chosen from three builds of one design spec:
-[docs/dashboard-compare/](docs/dashboard-compare/README.md).
-
-## How it was evaluated
-
-Every evaluation follows the same discipline. Tune only on data already seen, freeze the code with a
-git tag, commit the protocol and my predictions, run once, and save the output unedited. Anything worked
-out after seeing a result goes in a separate file marked post-hoc. That held for:
-- the test week, below;
-- [live week 1](docs/live-protocol.md), on a second generated world;
-- [live week 2](docs/live-week-2-protocol.md), on a third world, with both agents.
-
-For the test week:
-
-- **Split by date.** Sep 28 - Oct 4 is a warm-up week with no incidents. Oct 5 - 18 is the train
-  period (12 incidents). Oct 19 - 25 is the test week (11 incidents, 10 of them actionable; the
-  other is an expected traffic burst).
-- **Tuned on train only.** Every method and threshold was chosen on the train period.
-  [docs/log.md](docs/log.md) records each step with its numbers, including the ones that failed.
-- **Frozen before the test.** The code and every parameter were frozen at the git tag
-  `pre-test-freeze` ([docs/config-frozen.md](docs/config-frozen.md)), and the protocol was written
-  first: which systems, which metrics, and what would not be done after seeing the numbers
-  ([docs/test-protocol.md](docs/test-protocol.md)).
-- **Predictions, then one run.** The author's predictions were committed, then the test week was
-  run once. The runner's output was saved unedited to
-  [docs/results/test-week.md](docs/results/test-week.md). Everything written after that is marked
-  post-hoc and kept in a separate file.
-- **One disclosed exposure.** One test-week label row (INC-014) was seen by accident on Nov 10,
-  before the minimum change for CPU throttling (0.18) and its injection test were chosen. It is
-  reported separately below; the full note is in the protocol.
-
-## Results on the test week
-
-Five systems were scored. System 5 was named the primary system in advance.
-
-| System | Alerts per day | Per-alert precision | Incidents detected (of 10) | Wilson 95% interval | Pages | False pages per day |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1. Naive baseline | 124.6 | 0.256 | 10 | 0.72 - 1.00 | - | - |
-| 2. Seasonal baseline on everything (first build) | 87.6 | 0.294 | 9 | 0.60 - 0.98 | - | - |
-| 3. Final alerts | 38.6 | 0.742 | 9 | 0.60 - 0.98 | - | - |
-| 4. Final alerts + correlator pages | 38.6 | 0.742 | 9 | 0.60 - 0.98 | 26 | 1.43 |
-| **5. Final + pages + frozen feedback (primary)** | 32.0 | 0.79 | 9 | 0.60 - 0.98 | 24 | 1.14 |
-
-Source: [docs/results/test-week.md](docs/results/test-week.md), the pre-registered run. Alerts are
-counted after the scorer's 30-minute dedup; "frozen feedback" means the kinds of alert demoted by the
-train labels stay demoted for the whole test week and nothing is learned from it.
-
-- **Headline.** The primary system detected 9 of 10 actionable incidents (Wilson 95% interval
-  0.60 - 0.98), with per-alert precision 0.79 and 1.14 false pages per day (8 false pages in 7 days,
-  out of 24 pages).
-- **The miss.** INC-015, a Trino saturation, was missed by systems 3 - 5. The naive baseline caught it.
-- **Without INC-014.** That incident, the one whose label was seen beforehand, was detected. Leaving
-  it out, the primary system detected 8 of 9.
-- **Feedback, before vs. after.** Per-alert precision 0.742 to 0.79, false pages 10 to 8. No
-  incident stopped paging because of feedback.
-- **Pages.** 1,445 raw alerts became 26 pages (24 after feedback). No page covered two labeled
-  incidents; a labeled incident was spread over 1.6 pages on average.
-- **Both incident types that never occurred in train** (a scheduler stall and broker GC pressure)
-  were detected. Source: the scenario column in test-week.md (INC-020, INC-023), against the train
-  list in [docs/dataset.md](docs/dataset.md).
-
-False alerts per system:
-
-| System | Alerts | True | Expected (non-actionable incident) | False alerts | False pages |
-| --- | --- | --- | --- | --- | --- |
-| 1. Naive baseline | 872 | 221 | 10 | 641 | - |
-| 2. Seasonal baseline on everything | 613 | 177 | 10 | 426 | - |
-| 3. Final alerts | 270 | 193 | 10 | 67 | - |
-| 4. Final alerts + pages | 270 | 193 | 10 | 67 | 10 |
-| 5. Final + pages + frozen feedback | 224 | 169 | 10 | 45 | 8 |
-
-Source: [docs/results/test-week-posthoc.md](docs/results/test-week-posthoc.md), section d. **This
-table is post-hoc**: it was computed after the result was seen, from the same alerts, because the
-pre-registered output printed precision but not the counts.
-
-**Time to detect.** The slowest detection was 405 minutes (INC-013, a memory leak), for systems 2 - 5.
-The pre-registered table shows a median of 13.0 minutes for systems 3 - 4 and 10.0 for system 5, but
-those two numbers were timed differently (after the scorer's dedup, and on raw alerts). Timed the
-same way the systems are identical for every incident: 13.0 by the scorer's timing, 10.0 on raw
-alerts. Feedback changed no time to detect. Source: test-week.md for the two medians,
-test-week-posthoc.md section c for the like-for-like comparison.
-
-**Correction (Nov 16): live timing.** The times and page counts above are batch numbers. Replayed one
-minute at a time through the streaming engine, the same alerts fire but are known later: system 5's time
-to detect is median 13.0 min and maximum 409 min (pre-registered: 10.0 and 405), and the engineer is paged
-29 times, 11 of them false, which is 1.57 false pages per day (pre-registered: 1.14, from the 24 pages left
-at the end of the week). No incident changes between detected and missed. Post-hoc: [Live timing](docs/results/test-week-posthoc.md#live-timing-post-hoc-streaming-engine).
-
-**Predictions against the result.**
-
-| Predicted before the run | Result |
+| What matters | Result |
 | --- | --- |
-| Recall 70 - 100% | 9 of 10 |
-| INC-014 pages (60/40 that it does) | it paged |
-| False pages per day: 1 - 2 | 1.14 |
-| Median time to detect: 7 - 12 min | 10.0 on raw alerts, 13.0 by the scorer's timing |
-| Maximum time to detect: 45 - 75 min | 405 min: far outside |
-| Feedback removes 0 - 2 false pages | 2 |
-| False volume ordering 5 <= 4 < 3 < 2 < 1 | 8 <= 10 < 67 < 426 < 641 |
+| Real incidents caught on a held-out test week | **9 of 10** |
+| False alerts, compared with a simple baseline detector | **641 → 45 (93% fewer)** |
+| Share of alerts that were real (precision) | **0.26 → 0.79** (real ÷ (real + false): 169 of 214; the 10 alerts on a planned traffic burst count as neither) |
+| Raw alerts grouped into pages to an engineer | **1,445 → 24** in one week (batch result) |
+| False pages per day, in the Attacker live week | **0.29** |
+| Results held on additional held-out weeks | **12 of 14** (Scripted live week) and **9 of 11** (Attacker live week) detected |
 
-Source: predictions in [docs/test-protocol.md](docs/test-protocol.md); results from the two files
-above (the ordering from the post-hoc table).
+The AI has no say in paging. Pages come from plain statistics that I can check by hand, with no model involved. After a page goes out, a triage agent examines it with read-only tools and writes a brief note: whether a human needs to look, the likely cause, the impact, and a next step. If the triage agent is wrong, the page has already gone out.
 
-## What did not work (and was left out)
+---
 
-- **Saturation forecast.** A line fitted to the last hour of memory, alerting when the limit would
-  be reached within 4 hours. It was built and tested, and it was never faster than the seasonal
-  baseline on a leak: 330 minutes against 75 on the train leak (INC-007), and, checked afterwards on
-  the test leak (INC-013), 800 against 405. A slow leak is "unusual" long before it is "about to run
-  out". It is in the code, switched off. Sources: docs/log.md, "Nov 10, saturation forecast";
-  test-week-posthoc.md section b (exploratory).
-- **Change point detector.** A CUSUM on the seasonal z-score, meant to catch small sustained shifts.
-  On train it raised 517 alerts, 5 of them true. The method assumes a quiet series gives independent
-  noise of about one wobble; the real scores are wider (standard deviation 1.1 - 1.6) and correlated
-  from one reading to the next (0.2 - 0.33), so ordinary drift looks like a shift. It was not
-  adopted; the code is on the branch `change-point`. Source: docs/log.md, "Nov 11, change point
-  detector (not adopted)".
+## 1. The problem
 
-## A second world: the scripted live week
+Modern data platforms such as Kafka, Spark, Flink, Trino and Airflow on Kubernetes report a very large number of health metrics. The obvious way to monitor them is a statistical alarm on every metric. In this project that simple approach did catch every real problem, but it also:
 
-The test week is used up, so the same frozen system was run once on a second world: a generated week
-with no incidents, streamed through Kafka, into which 14 failures were injected (seven scenarios,
-twice each, at seeded random times and sizes). The scenarios, their ranges, the schedule and the
-scoring rule were committed before the run ([docs/live-protocol.md](docs/live-protocol.md)); the
-result is saved as the runner wrote it ([docs/results/live-week-1.md](docs/results/live-week-1.md)).
+- raised about **125 alerts a day**, and
+- **3 in 4 of them were false**.
 
-| | |
-|---|---|
-| injections detected | 12 of 14 |
-| missed | both Flink state leaks (no alert at all in 6 hours each) |
-| time to detect, median / maximum | 12 min / 132 min |
-| pages sent | 29: 25 for an injection, 4 false |
-| false pages per day | 0.57, the same 4 pages the week has with nothing injected |
+An on-call engineer would stop reading them, and a real incident would get lost in the pile. So I aimed to cut false alerts sharply while still catching nearly everything. On the test week the false alerts went from 641 to 45, a 93% drop, and I caught 9 of the 10 real incidents; the simple baseline caught all 10. The one miss was the cost of a rule that removed many false alarms; I found it on the test week and kept the result as it was.
 
-How to read it:
+One alerting rule can't fit every kind of metric, because metrics misbehave in different ways:
 
-- **The slow-leak limitation is confirmed.** The Flink leaks added 16-23% to TaskManager memory in
-  their 6 hours and never alerted. The consumer leaks were paged after 116 and 132 minutes, when
-  memory was 30-40% above its usual level.
-- **The zero-baseline limitation did not show here.** Both Trino heavy queries were paged in 12-17
-  minutes, first through the workers' GC time; the queued-queries series also alerted. These
-  injections last 30-60 minutes at 0.8-1.2 of the batch scenario's size, so this does not say the
-  test-week miss (INC-015) is fixed.
-- **Four detections at 0 minutes say little.** The slow deploys and the crash loops restart a pod in
-  their first minute, as their batch originals do, and a restart always pages. Their next signals
-  came 10-14 minutes in.
-- **One cause, nine pages.** The hourly DAG paused for nine hours paged once per missed run.
-- 14 injections, two per scenario, one seed: counts, not rates. The injected failures are declared
-  effects on the readings, not simulated physics; each scenario lists what it approximates
-  (`sentinel_stream/scenarios_live.py`).
+| Pattern | Why simple alerting fails |
+| --- | --- |
+| **Rhythms** | Traffic is lower on weekends, so a Saturday compared with a weekday looks like an outage. |
+| **Quiet series** | Numbers that usually sit at zero make any tiny blip look huge. |
+| **Events** | A crash is an event, not a smooth number, and a paused job sends no data at all. |
+| **Slow leaks** | Memory that creeps up slowly never looks dramatic at any single moment. |
 
-## A third world: live week 2, the whole system against an attacker agent
+---
 
-The frozen detector, triage agent and attacker ran together once, on a new quiet world (seed 13): one
-week streamed through Kafka. The attacker's campaign was recorded and replayed for scoring, and the
-triage agent ran three separate times on every page. The result is saved as the runner wrote it:
-[docs/results/live-week-2.md](docs/results/live-week-2.md). Total cost: USD 4.54.
+## 2. The goal
 
-**The attacker** made 11 injections over 7 days:
-- 6 named scenarios and 5 incidents of its own;
-- 5 it called noticeable and 6 subtle;
-- at a cost of USD 2.61.
+The long-term goal is one system that works across all data platform products. It finds problems, groups them into incidents, suggests a likely cause, and learns from labels given by engineers. This phase built detection, grouping, feedback and an advisory triage note, validated on simulated data, including simulated feedback labels. The next steps are full root cause analysis and connecting to real platforms ([section 4](#4-this-phase-build-and-prove-the-detection-core)).
 
-**Detection.** 2 false page-outs in 7 days (0.29 a day, exact Poisson 95%: 0.03-1.03). Both also page
-with nothing injected, so they are the quiet world's own noise.
+| Goal | What it means |
+| --- | --- |
+| **Monitor any product** | Cover a new product on day one, with no hand-written alert rules. |
+| **Detect and group** | Turn many related anomalies into a few clear incidents. |
+| **Explain the cause** | Use AI to suggest the likely root cause and a fix. |
+| **Learn from feedback** | Become quieter and more accurate as engineers label alerts. |
 
-| Injections | n | Detected | Wilson 95% | Median time to detect |
-|---|---|---|---|---|
-| All | 11 | 9 | 0.52-0.95 | 15 min |
-| Named scenarios | 6 | 4 | 0.30-0.90 | 6 min |
-| The attacker's own | 5 | 5 | 0.57-1.00 | 19 min |
-| Noticeable | 5 | 5 | 0.57-1.00 | 14 min |
-| Subtle | 6 | 4 | 0.30-0.90 | 20 min |
+---
 
-**Triage.** The scoring rule: on a real incident, "no" is dangerous and "unsure" is deferred. A false
-page is correct when answered "no". The final answer is the follow-up's.
+## 3. Overall design: one pipeline for every data platform product
 
-| Triage, per run (3 runs) | Result |
-|---|---|
-| Real pages (11): "needs a human: yes" | 10 in every run (Wilson 95%: 0.62-0.98) |
-| Real pages: "no" (dangerous) | 0 in every run |
-| Real pages: "unsure" | 1 in every run |
-| False pages (2): "no" | 0; both "unsure" in every run |
-| Same final answer in all 3 runs | 13 of 13 pages |
-| Time to the final answer | median 0.5 min; max 10.4 min (waiting for the follow-up) |
-| Cost per run | USD 0.53-0.81 |
+The design treats every product the same way: each product's metrics are mapped to a shared set of event types, and detection works on those event types.
 
-How to read it ([post-hoc analysis](docs/results/live-week-2-posthoc.md), written after the result):
+<p align="center"><img src="docs/diagrams/overview.svg" width="360" alt="Overview: products (Kafka, Spark, Flink, Trino, Airflow) feed source plugins that map their metrics to shared event types; the common event model (workload, canonical, product-specific) feeds detection, then correlation into incidents, an AI explanation, and engineer labels that feed back into detection."></p>
 
-- **The two misses.**
-  - A paused DAG (`customer_agg`, paused 14:00-19:00) had nothing to detect. The job runs once a day
-    at 03:30, so no run was due during the pause.
-  - A Flink state leak is the known slow-leak weakness again. It peaked at z +4.7 and +4.8, against a
-    threshold of 6. With the wobble's 5% floor, memory has to be about 30% above expected to alert,
-    which takes 8-10 h at that rate. The leak lasted 7.
-- **The attacker's own incidents were all caught, but they were loud.** They touched 5-9 series each,
-  at z 10-54. An agent that invents incidents does not automatically make them subtle.
-- **The triage agent never dismisses a false page.** The guard accepts "no" only with a named cause.
-  The agent could not name a cause for quiet-world noise, so both false pages ended "unsure". In
-  development, none of the 4 false pages ended "no" either. So far the agent adds context to real pages; it does
-  not yet reduce how many pages an engineer has to look at.
-- **Predictions.** Six of my seven predictions fell outside their ranges, all on the good side: more
-  detected, fewer false pages, more correct triage, lower cost. Every point prediction still lies
-  inside the result's 95% interval. With 5-11 cases per group, this week cannot tell my predictions
-  from the outcome; the ranges were too narrow.
-- **The development set.** Before freezing, the triage agent was iterated on live week 1. Its last
-  version got 23 of 25 real pages right with 0 dangerous answers. That week had been seen, so this is
-  a development number, not a held-out one
-  ([docs/results/triage-dev-week-1-v3.md](docs/results/triage-dev-week-1-v3.md)).
+**The common event model** has three layers:
 
-## Limitations
+| Layer | What it covers | Examples |
+| --- | --- | --- |
+| **1. Workload** | Things every pod has, whatever the product | CPU, memory, restarts |
+| **2. Canonical** | Ideas every data product shares | Throughput, backlog, latency, errors, whether a job run succeeded |
+| **3. Product-specific** | Things only one product has | Kafka replication health, Flink checkpoints, Spark data skew |
 
-- **Quiet, low-count series (INC-015).** The missed incident showed up on a queue length that sits
-  at zero and rose by about 22 queries. Count-like series must move by more than 6 units to be hot;
-  that left 2 hot readings out of 9, and an alert needs 3 of 5. The same 6-unit rule removed
-  hundreds of false alarms on train, so this is a trade-off, not a bug.
-- **Slow leaks (INC-013, and the Flink leaks in both live weeks).** INC-013 was detected only after
-  405 minutes. With the 5% floor, memory must be 30% above expected to be hot; it was 10% above after
-  55 minutes. The naive baseline, which has no floor, alerted after 190. All three Flink state leaks in
-  the live weeks were missed. This is the system's clearest weakness.
-- **Small samples.** 10, 14 and 11 incidents. One incident is ten points of recall, and the interval
-  for 9 of 10 runs from 0.60 to 0.98. Differences of one incident between systems mean nothing.
-- **Simulated data only.** Nothing was run against a real cluster. The live weeks are independent
-  worlds (new seeds), but their failures are declared effects on the readings, not simulated physics.
-  An attacker's "subtle" incident is only as subtle as the effects it chose.
-- **The scorer's entity rule.** An alert counts as true only if it is on a series or entity the
-  incident's label lists. Alerts on closely related things (throttling on the consumer pods during a
-  consumer-lag incident whose label names the consumer group) count as false. This lowers measured
-  precision and is also what taught the feedback loop to demote throttling alerts.
-- **Feedback is simulated.** Labels come from the scorer, not from people, and two weeks of them is
-  little: two kinds of alert were demoted.
-- **Triage reduces no work on false pages.** The code guard that removed dangerous "no" answers also
-  means a false page can only be dismissed with a named cause, and so far none has been. The agent's
-  answers also vary from run to run. In live week 2 the three runs agreed on all 13 pages, but in
-  development the same agent and the same pages gave different answers on two pages. Strictly scored,
-  the cause text of a named-scenario page never named the injected target (0 of 5 in each run). The
-  note's own list of affected entities did, on 14 of 15 pages; the strict rule reads only the cause.
-- **One attacker campaign.** Its own incidents were all caught, but they were loud. In a dry run, its
-  "new" incident was a named scenario rebuilt from primitives. A cap on named scenarios forces it to
-  invent, but nothing forces it to invent something hard.
-- **Not built.** The scope note also lists anomaly detection on logs and one ML method as a comparison.
-  Neither exists. (The triage agent reads logs, but nothing detects on them.)
+Every series has a catalog entry that specifies its layer and a common event name. For instance, Kafka consumer lag, Flink backpressure, Spark scheduling delay and Trino queued queries all share the event name "backlog". The router picks a rule from the series' metric name and the catalog's default detector, never from which product the series belongs to. A new product whose metrics fit the existing rules needs only catalog rows, not detector code; a new kind of must-not-rise counter would also have to be added to the router's metric lists.
 
-Sources:
-- test-week-posthoc.md sections a - c, for the two test-week incidents;
-- live-week-2-posthoc.md sections 3 and 4, for the leak and target naming;
-- triage-dev-week-1-v3.md (arm E), for run-to-run variation;
-- docs/log.md: "Nov 10, router diagnosis" (entity rule), "Nov 11, feedback loop" and "Nov 17, an
-  attacker agent" (dry run 1);
-- [docs/scope-v3.md](docs/scope-v3.md), for the scope.
+In this project the catalog is bundled with the simulated data. The per-product mapping files exist (one per product, with each metric's PromQL query (the query language of Prometheus, a widely used metrics system), generated with the simulated data), but the source plugins that would generate the catalog from a real platform are not written, and the backlog series run on the seasonal baseline as a fallback. Deep product knowledge is mostly needed to explain a problem. That is the triage agent's job, and deeper per-product diagnosis is next phase.
 
-## Next steps
+---
 
-- **Fix the slow-leak miss, then test it on a fourth world.** All three evaluation worlds are now
-  seen. A fix, for example a trend rule next to the seasonal one, has to be judged on a new seed with
-  its own protocol, and on its false pages as well as its catches.
-- **Let triage dismiss noise safely.** For example, compare a page with how often the same alert
-  fired in the past weeks. Measure on a held-out week whether false pages can be answered "no" without
-  any real one becoming dangerous.
-- **A harder attacker.** Reward the attacker for injections the detector misses, scored after the
-  campaign, without letting it see detection while it plays.
-- **Real data.** The detectors read only through `DataSource`. A Prometheus adapter behind the same
-  interface is the step to a real cluster.
+## 4. This phase: build and prove the detection core
+
+The full design is too large to fit into one project, so I implemented it in pieces. I tackled detection first, since triage and root cause both depend on alerts. If most alerts are false, nothing built on top of them can be relied upon.
+
+| Part of the overall design | In this phase | Status |
+| --- | --- | --- |
+| Common event model and routing | Every metric routed to the right rule | Built |
+| Detectors per event type | Seasonal baseline, guardrails, schedule watcher, job-run baseline | Built |
+| Group anomalies into incidents | Correlator using time and system topology | Built |
+| Learn from engineer feedback | Noisy alert types demoted | Built |
+| AI explanation on each page | Advisory triage note | Built |
+| Full AI root cause analysis and fixes | Deeper diagnosis per product | Next phase |
+| Connect to real data platforms | Prometheus and Kubernetes adapters | Next phase |
+
+Everything in this phase was validated on simulated data (see [section 6](#6-how-it-was-validated)).
+
+---
+
+## 5. How it works
+
+### 5.1 Five steps from a raw reading to a page
+
+| Step | What happens |
+| --- | --- |
+| **1. Route** | Pick the right rule for each metric, based on what kind of signal it is. |
+| **2. Detect** | Compare each reading with what's normal for this hour, on the same kind of day (weekday or weekend). |
+| **3. Persist** | Alert only if 3 of the last 5 readings are unusual, so one-off blips stay quiet. |
+| **4. Group** | Related alerts become one page to an engineer. |
+| **5. Learn** | Alert types that engineers keep marking as false are demoted. |
+
+Steps 3 to 5 are where most of the noise is removed. Each was added only after measurements on training data showed it helped.
+
+### 5.2 Architecture
+
+![Architecture: in the testing-only simulator, the simulated world and the injector feed a publisher into the Kafka telemetry topic; the detection engine (router, detectors, alert record, correlator at 15 min and 1 hop, feedback) produces pages for the on-call engineer, which go to the triage agent and dashboard and to the live scorer.](docs/diagrams/architecture.svg)
+
+- **Alert Event Data Simulator (testing only).** There is no real company cluster in this project, so a simulator creates realistic platform data and streams it into Kafka, the tool real data platforms use for live data. At a real company, this box is replaced by the company's own data and the engine stays the same.
+- **Detection engine (the product).** Plain statistics with no AI model. The same code runs on saved files and on the live stream, and gives identical alerts both ways.
+- **Outputs.** Pages go to the on-call engineer, and each page triggers an AI triage note. A dashboard replays everything. Alerts and pages are written exactly once, even if the engine is restarted mid-stream.
+
+### 5.3 How metrics are categorized and routed
+
+Every metric goes through four questions in order, and the first "yes" decides its rule:
+
+| # | Question | Rule | Example metrics |
+| --- | --- | --- | --- |
+| Q1 | Is it a counter (only goes up) that should stay flat? | **Counter rule:** any increase alerts at once | Pod restarts, Flink job restarts, Flink checkpoint failures |
+| Q2 | Is it a gauge (rises and falls) that must stay at zero? | **Above-zero rule:** any value above 0 alerts | Kafka under-replicated partitions |
+| Q3 | Does the catalog say it's seasonal? | **Seasonal baseline:** compare with same hour, same day type | CPU, CPU throttling, throughput, error rates |
+| Q4 | Does it need a specialized detector that isn't built yet? | **Seasonal baseline (fallback),** reported separately | Memory, JVM heap, garbage collection time, consumer lag, queues, latency |
+| — | None of the above | **Stop with an error** | A new kind of metric is never silently left unmonitored |
+
+Two more routing settings:
+
+- **Minimum change to alert, for seasonal metrics.** CPU throttling must rise by at least 0.18, because healthy batch jobs already throttle. Count-like metrics such as lag and queues must move by more than 6 units. All other metrics use a 5% floor. These settings stop quiet metrics from alerting on tiny wiggles.
+- **Job runs are not metrics.** Airflow and Spark job runs go to two separate detectors: the schedule watcher and the job-run baseline.
+
+### 5.4 The four detectors
+
+| Detector | Catches | How |
+| --- | --- | --- |
+| **Seasonal baseline** | Spikes and drops against normal | "Normal" is the middle value (median) of the same time on the last 5 days of the same type. An alert needs a reading about 6 typical wiggles from normal, on 3 of the last 5 readings. |
+| **Guardrails** | Things that are always bad | Any restart, failed checkpoint or under-replicated partition alerts at once, with no baseline needed. |
+| **Schedule watcher** | Jobs that didn't run | Alerts when a scheduled run hasn't started 10 minutes after its time, misses its deadline, or fails. |
+| **Job-run baseline** | Jobs that succeed but run far too long | Compares each run's duration with that job's own history. |
+
+### 5.5 What an alert looks like
+
+Every alert is a comparison anyone can check against a chart. Here is a real alert from the Scripted live week (the triage agent's development set). During an injected heavy Trino query (inj-05, scenario `trino_heavy_query`), the JVM heap of the Trino worker `trino-worker-1`, which normally sits around **55%** at that hour, read **95%**, so the engineer reads:
+
+> **"jvm_heap_used_ratio (trino-worker-1) is 1.7x expected for this time of day (0.949 vs 0.554 +/- 0.028, z=+14.2; ...)"**
+
+z=+14.2 means the reading is 14.2 typical wiggles above normal; 6 is enough to alert.
+
+The median is used instead of the average because one bad day in the history would drag an average up and hide the next problem.
+
+### 5.6 From alerts to pages: grouping and feedback
+
+- **Correlator.** Two alerts are linked when they are at most 15 minutes apart **and** at most one step apart in the platform's relationship graph, for example a pod and the consumer group it belongs to. Grouping by time alone mixed up unrelated problems, and grouping by connection alone mixed up different days. Requiring both never merged two different incidents.
+- **Feedback.** Engineer labels are counted per type of alert. Once a type has at least 10 labels and fewer than about 1 in 4 are real, it is **demoted**: it still appears on pages as context, but it can no longer page anyone on its own. It is never deleted, and it can come back if later labels show it's real.
+
+### 5.7 AI triage, advisory only
+
+After a page goes out, a fresh AI agent (Claude) examines it with **read-only** tools: metrics, system topology, logs, Kubernetes events and recent changes. It writes a brief note: whether a human needs to look, the likely cause, the impact, the evidence and a next step.
+
+- **It has no say in paging.** If the triage agent is wrong, the page has already gone out.
+- **A guard in the code.** The agent can only say "no human needed" if it names a cause and sees no impact. Otherwise the answer becomes "unsure". I added that after it incorrectly said "no" on two real crashes during development. The downside is that triage doesn't yet reduce the number of pages; letting it safely say "no" for noise is on the roadmap.
+- **Hard budgets.** Each investigation has limits on tool calls, time and cost.
+
+**Example:** after a bad deploy, an app started crash-looping. The detector paged immediately. The triage agent read the change log and error logs and found a typo in the new configuration ("bootstrp" instead of "bootstrap"). It also pointed out that other metrics only looked healthy because no data was arriving at all.
+
+---
+
+## 6. How it was validated
+
+### Test data: simulator and Attacker Agent (testing tools, not part of the product)
+
+To validate Sentinel Lens without access to a production data platform, two testing tools were used:
+
+- the **Alert Event Data Simulator**, which creates realistic data platform metrics, logs, events and job runs; and
+- the **Attacker Agent**, a second AI agent. **To simplify Sentinel Lens validation, we introduced this Attacker Agent to simulate various Data Platform product events.** It invents incidents such as crashes, slow queries, paused jobs and memory leaks, and injects them through the simulator. It never sees the detector's alerts, and the answer key is hidden from the engine.
+
+### Evaluation discipline
+
+I followed a strict freeze-then-test protocol because each test week has only about 10 incidents, and if I retuned after seeing the results, the metrics would be meaningless. Every evaluation followed the same four steps:
+
+1. **Tune** only on training data.
+2. **Freeze** the code with a version tag.
+3. **Predict:** write down the protocol and expected results first.
+4. **Run once** and publish the output unedited. Any later analysis is kept in a separate, clearly marked file.
+
+This was repeated on **three different weeks that were never used for tuning.** One exception is disclosed in [docs/test-protocol.md](docs/test-protocol.md): one test-week label (INC-014) was seen before the freeze, while working on the router, though no test-week data was seen. INC-014 is reported separately: without it, the test week result is 8 of 9 detected.
+
+---
+
+## 7. Results
+
+Three terms used below: **held-out** means the week was kept aside and never used for tuning. **Batch** means the whole week was scored at once from saved files, with each alert stamped at the start of the 5-minute reading it covers. **Live-timed** means each alert is timed when the streaming engine could actually know it, up to 4 minutes later, when that reading is complete.
+
+Scripted live week = live week 1, Attacker live week = live week 2 in the reference section below and in docs/results.
+
+The two live weeks are separate generated worlds (seeds 11 and 13), each 35 quiet days (28 of history, then the streamed week), run over the same simulated dates, Oct 26 to Nov 2. Their incidents were injected on top.
+
+### Noise reduction on the held-out test week
+
+| Version of the system | False alerts | Incidents detected |
+| --- | --- | --- |
+| Simple baseline detector | 641 | 10 of 10 |
+| Seasonal baseline on everything (first build) | 426 | 9 of 10 |
+| Final alerting (routing and noise fixes) | 67 | 9 of 10 |
+| **Final + grouping into pages + feedback** | **45** | **9 of 10** |
+
+In the same week, **1,445 raw alerts became 24 pages** (batch result), about 60 alerts per page, and no page ever merged two different incidents. 1,445 is the raw count; the false-alert counts in the table above are after merging repeats within 30 minutes (one alert per target per 30 minutes). Feedback reduced false pages from 10 to 8 without losing any real incident.
+
+The live streaming engine sends 29 pages on the same week (post-hoc analysis; it decides paging once per step).
+
+### Results across three held-out weeks
+
+The training weeks (Oct 5-18) are where all tuning happened and are not scored.
+
+| | Test week (offline, run once) | Scripted live week | Attacker live week |
+| --- | --- | --- | --- |
+| How incidents were created | Simulator | Scripted injections | Invented by the Attacker Agent |
+| Role | Held-out test, batch | Held-out test for detection; development set for the triage agent | Final held-out test for detection and triage |
+| Incidents detected | **9 of 10** | **12 of 14** | **9 of 11** |
+| False pages per day | 1.14 | 0.57 | **0.29** |
+| Median time to detect | 13 min | 12 min | 15 min |
+
+The test-week false pages per day (1.14) is the pre-registered batch figure; the live streaming engine gives 1.57 on the same week (29 pages, 11 false). The time-to-detect row is live-timed in all three columns (when the streaming engine could know); the batch figure for the test week is 10.0 min.
+
+What was missed: in the test week, INC-015 (a Trino queue that normally sits at zero never showed enough readings above the 6-item minimum change); in the Scripted live week, two slow Flink state leaks (inj-04, inj-08) that stayed under the roughly 30% memory rise needed to alert; in the Attacker live week, another slow Flink leak (atk-010, same limit) and a paused DAG (atk-004) with no run due during the pause, so nothing observable changed.
+
+In the Attacker live week, all 5 of the Attacker Agent's own designs were caught, 9 of 11 overall; both misses were subtle versions of pre-built scenarios, and one of them had no observable effect. The triage agent said "needs a human" on 10 of 11 real pages, never told the engineer to ignore a real incident, and gave the same answers across three separate runs.
+
+---
+
+## 8. Known limitations
+
+| Limitation | Why it happens | Plan |
+| --- | --- | --- |
+| **Feedback was simulated** | The feedback labels were the scorer's own verdicts on training-week alerts. No engineer labeled any alert. | Collect labels from real engineers |
+| **Simulated data only** | Nothing has run on a real company system | Connect to real data |
+
+---
+
+## 9. Roadmap
+
+| Next step | Why |
+| --- | --- |
+| **Trend rule for slow leaks**, tested on a new unseen week | Fix the clearest weakness |
+| **Triage that safely dismisses noise** | Reduce the number of pages engineers must look at, rather than only explaining them |
+| **Full AI root cause analysis and fixes** | Complete the "Explain" stage of the overall design |
+| **Prometheus and Kubernetes adapters** | Run on real data platforms. The detectors read through one interface, so the engine doesn't change |
+| **A harder Attacker Agent** | Find blind spots by rewarding incidents the detector misses |
+
+---
+
+## 10. Key design decisions
+
+| Decision | Why |
+| --- | --- |
+| **Plain statistics, not a machine-learning model, for detection** | Every alert can be checked by hand, and a small number of example incidents is not enough to train a model that can be trusted. |
+| **AI is advisory only** | A wrong AI note can never hide an incident. |
+| **Median, not average** | One bad day in the history doesn't distort what "normal" means. |
+| **Weekdays compared with weekdays, weekends with weekends** | Removes a large share of false alarms caused by weekly rhythms. |
+| **Demote noisy alerts, never delete them** | Decisions stay reviewable and reversible. |
+| **Freeze, predict, then test once** | With few incidents per test, re-tuning after seeing results would make the numbers meaningless. |
+| **Tried and dropped** | A forecast-based detector and a change-point detector were built and measured. They were slower or much noisier than the simple baseline, so they are switched off. Numbers: [docs/design-doc.md](docs/design-doc.md). |
+
+---
+
+## 11. See it in action
+
+The dashboard replays the Attacker live week (simulated clock Oct 26 to Nov 2; the run itself was on Nov 19, 2026, the incidents invented by the Attacker Agent) in 5-minute steps (Play moves 5 min, 15 min, 1 h or 6 h per tick), showing only what the system knew at each moment:
+
+- **Open** `dashboard/dist/sentinel-lens-week2.html` in a browser. It's one file, with no server, setup or API key, but it needs an internet connection (ECharts and fonts load from CDNs).
+- **Play** the week, or press **N** to jump to the next page.
+- **Click a page** to see its one-line reason, the AI triage note, and the chart of actual vs. normal.
+- **Press R** to reveal the hidden answer key of injected test incidents.
+
+---
+
+## 12. Run it yourself
+
+Checked on Python 3.14, Docker 29.6 and Node 24 (not pinned). The commands assume macOS or Linux. `data/` is generated, not in git.
+
+```bash
+git clone https://github.com/pgopalabhatla/sentinel-lens.git && cd sentinel-lens
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt && export PYTHONPATH=.
+python -m sentinel_sim.generate --out data --seed 7   # about 20 s
+pytest                                                # some tests skip without data/ or a broker
+open dashboard/dist/sentinel-lens-week2.html          # macOS; or open the file in any browser
+```
+
+Docker is needed only for the live stream, and Node only for the dashboard's browser checks: see [Setup and usage](#setup-and-usage) below.
+
+If something fails:
+- **Port 19092 already in use:** the broker binds 127.0.0.1:19092. An earlier broker may still be running: `docker compose down`.
+- **Tests skipped:** they need `data/` (the generate command above) or `data_live/` (`python -m sentinel_stream.quiet_world --days 35 --seed 11 --out data_live`).
+- **Playwright install fails:** the browser checks are optional (`pytest -m ui`). Run `npm install` and `npx playwright install chromium` in `dashboard/e2e`.
+
+---
+
+## 13. Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Alert** | The system noticing that a metric is unusual. |
+| **Page** | A notification that actually goes to an on-call engineer. Many alerts can become one page. |
+| **Incident** | A real problem in the platform. |
+| **Precision** | The share of alerts that were about a real incident. |
+| **Seasonal baseline** | "Normal" for a metric at this time of day, on this kind of day. |
+| **Correlator** | The part that groups related alerts into one page. |
+| **Triage agent** | The AI that writes an advisory note explaining each page. |
+| **Attacker Agent** | A testing tool that invents incidents to validate Sentinel Lens. Not part of the product. |
+| **Alert Event Data Simulator** | A testing tool that creates realistic platform data. Not part of the product. |
+| **SRE** | Site Reliability Engineering: the team that keeps systems running. |
+
+---
 
 ## Reference: the router, as a flowchart
 
 The first "yes" wins. Names are the constants in `sentinel_lens/router.py` (the two metric lists
 live in `sentinel_lens/detectors/guardrails.py`).
 
-```mermaid
-flowchart TD
-    S["A series from the catalog<br/>(metric, unit, default_detector)"] --> Q1{"Q1: metric in<br/>FLAT_COUNTER_METRICS?"}
-    Q1 -- yes --> R1["counter_rule<br/>any increase is an alert"]
-    Q1 -- no --> Q2{"Q2: metric in<br/>ZERO_GAUGE_METRICS?"}
-    Q2 -- yes --> R2["above_zero<br/>any value above 0 is an alert"]
-    Q2 -- no --> QS{"Optional: saturation flag on AND<br/>metric in SATURATION_METRICS?<br/>The flag is off by default"}
-    QS -- yes --> RS["saturation forecast<br/>not part of the evaluated system"]
-    QS -- no --> Q3{"Q3: default_detector ==<br/>seasonal_baseline?"}
-    Q3 -- yes --> R3["seasonal"]
-    Q3 -- no --> Q4{"Q4: default_detector in<br/>SEASONAL_FALLBACK?"}
-    Q4 -- yes --> R4["seasonal, marked as fallback"]
-    Q4 -- no --> E["error: unknown detector<br/>nothing is guessed"]
-    R3 --> P1{"metric in<br/>METRIC_MIN_CHANGE?"}
-    R4 --> P1
-    P1 -- yes --> M1["min_change = that entry"]
-    P1 -- no --> P2{"unit in COUNT_UNITS?"}
-    P2 -- yes --> M2["min_change = 6"]
-    P2 -- no --> M3["min_change = 0"]
-    M1 --> F["history = day_type<br/>absolute floor = min_change / 6"]
-    M2 --> F
-    M3 --> F
-```
+<p align="center"><img src="docs/diagrams/router.svg" width="840" alt="Router flowchart: a catalog series (metric, unit, default_detector) goes through questions in order, and the first yes picks its rule. Q1: metric in FLAT_COUNTER_METRICS gives counter_rule, any increase is an alert. Q2: metric in ZERO_GAUGE_METRICS gives above_zero, any value above 0 is an alert. Optional: with the saturation flag on (off by default) and the metric in SATURATION_METRICS, the saturation forecast, not part of the evaluated system. Q3: default_detector equals seasonal_baseline gives seasonal. Q4: default_detector in SEASONAL_FALLBACK gives seasonal, marked as fallback. Otherwise an error: unknown detector, nothing is guessed. For seasonal series, min_change is the METRIC_MIN_CHANGE entry if there is one, else 6 if the unit is in COUNT_UNITS, else 0; then history = day_type and absolute floor = min_change / 6."></p>
 
 | Constant | Value | Series it catches |
 | --- | --- | --- |
