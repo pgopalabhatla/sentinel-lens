@@ -63,6 +63,7 @@ The long-term goal is one system that works across all data platform products. I
 The design treats every product the same way: each product's metrics are mapped to a shared set of event types, and detection works on those event types.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}, "themeVariables": {"fontFamily": "sans-serif"}}}%%
 flowchart LR
     P["Products<br/>Kafka · Spark · Flink · Trino · Airflow"] --> M["Source plugins<br/>map each product's metrics<br/>to shared event types"]
     M --> E["Common event model<br/>1. Workload<br/>2. Canonical<br/>3. Product-specific"]
@@ -122,6 +123,7 @@ Steps 3 to 5 are where most of the noise is removed. Each was added only after m
 ### 5.2 Architecture
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}, "themeVariables": {"fontFamily": "sans-serif"}}}%%
 flowchart TB
     subgraph SIM["Alert Event Data Simulator (for testing and validation only, not part of the product)"]
         W["Simulated world<br/>metrics, logs, events, job runs"] --> PUB["Publisher<br/>1 minute at a time"]
