@@ -62,17 +62,7 @@ The long-term goal is one system that works across all data platform products. I
 
 The design treats every product the same way: each product's metrics are mapped to a shared set of event types, and detection works on those event types.
 
-```mermaid
-%%{init: {"flowchart": {"htmlLabels": false}, "themeVariables": {"fontFamily": "sans-serif"}}}%%
-flowchart LR
-    P["Products<br/>Kafka · Spark · Flink · Trino · Airflow"] --> M["Source plugins<br/>map each product's metrics<br/>to shared event types"]
-    M --> E["Common event model<br/>1. Workload<br/>2. Canonical<br/>3. Product-specific"]
-    E --> D["Detect<br/>one detector per event type"]
-    D --> C["Correlate<br/>related anomalies become one incident"]
-    C --> X["Explain (AI)<br/>root cause, evidence, suggested fix"]
-    X --> H["Engineer<br/>labels real or false"]
-    H -- feedback --> D
-```
+![Overview: products (Kafka, Spark, Flink, Trino, Airflow) feed source plugins that map their metrics to shared event types; the common event model (workload, canonical, product-specific) feeds detection, then correlation into incidents, an AI explanation, and engineer labels that feed back into detection.](docs/diagrams/overview.svg)
 
 **The common event model** has three layers:
 
@@ -122,26 +112,7 @@ Steps 3 to 5 are where most of the noise is removed. Each was added only after m
 
 ### 5.2 Architecture
 
-```mermaid
-%%{init: {"flowchart": {"htmlLabels": false}, "themeVariables": {"fontFamily": "sans-serif"}}}%%
-flowchart TB
-    subgraph SIM["Alert Event Data Simulator (for testing and validation only, not part of the product)"]
-        W["Simulated world<br/>metrics, logs, events, job runs"] --> PUB["Publisher<br/>1 minute at a time"]
-        INJ["Injector<br/>adds test incidents"] -- control topic --> PUB
-    end
-    PUB --> K["Kafka<br/>telemetry topic"]
-    subgraph ENG["Detection engine: plain statistics, no LLM"]
-        R["Router<br/>one rule per metric"] --> DET["Detectors<br/>seasonal · guardrails · schedule · job runs"]
-        DET --> AR["Alert record<br/>time, target, score, direction, why"]
-        AR --> COR["Correlator<br/>≤ 15 min apart AND ≤ 1 hop"]
-        COR --> FB["Feedback<br/>demote noisy alert types"]
-    end
-    K --> R
-    FB --> PG["Pages<br/>to the on-call engineer"]
-    PG --> TRI["Triage agent<br/>advisory note"]
-    TRI --> DASH["Dashboard<br/>replays pages and notes"]
-    PG --> SC["Live scorer (testing)<br/>pages vs. hidden answer key"]
-```
+![Architecture: in the testing-only simulator, the simulated world and the injector feed a publisher into the Kafka telemetry topic; the detection engine (router, detectors, alert record, correlator at 15 min and 1 hop, feedback) produces pages for the on-call engineer, which go to the triage agent and dashboard and to the live scorer.](docs/diagrams/architecture.svg)
 
 - **Alert Event Data Simulator (testing only).** There is no real company cluster in this project, so a simulator creates realistic platform data and streams it into Kafka, the tool real data platforms use for live data. At a real company, this box is replaced by the company's own data and the engine stays the same.
 - **Detection engine (the product).** Plain statistics with no AI model. The same code runs on saved files and on the live stream, and gives identical alerts both ways.

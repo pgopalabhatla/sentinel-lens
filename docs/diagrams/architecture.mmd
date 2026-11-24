@@ -1,0 +1,17 @@
+flowchart TB
+    subgraph SIM["Alert Event Data Simulator (for testing and validation only, not part of the product)"]
+        W["Simulated world<br/>metrics, logs, events, job runs"] --> PUB["Publisher<br/>1 minute at a time"]
+        INJ["Injector<br/>adds test incidents"] -- control topic --> PUB
+    end
+    PUB --> K["Kafka<br/>telemetry topic"]
+    subgraph ENG["Detection engine: plain statistics, no LLM"]
+        R["Router<br/>one rule per metric"] --> DET["Detectors<br/>seasonal · guardrails · schedule · job runs"]
+        DET --> AR["Alert record<br/>time, target, score, direction, why"]
+        AR --> COR["Correlator<br/>≤ 15 min apart AND ≤ 1 hop"]
+        COR --> FB["Feedback<br/>demote noisy alert types"]
+    end
+    K --> R
+    FB --> PG["Pages<br/>to the on-call engineer"]
+    PG --> TRI["Triage agent<br/>advisory note"]
+    TRI --> DASH["Dashboard<br/>replays pages and notes"]
+    PG --> SC["Live scorer (testing)<br/>pages vs. hidden answer key"]
