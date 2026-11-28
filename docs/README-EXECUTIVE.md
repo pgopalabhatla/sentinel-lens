@@ -296,7 +296,7 @@ pytest                                                # some tests skip without 
 open dashboard/dist/sentinel-lens-week2.html          # macOS; or open the file in any browser
 ```
 
-Docker is needed only for the live stream, and Node only for the dashboard's browser checks: see [Setup and usage](#setup-and-usage) below.
+Docker is needed only for the live stream, and Node only for the dashboard's browser checks: see [Setup and usage](../README.md#setup-and-usage) in the main README.
 
 If something fails:
 - **Port 19092 already in use:** the broker binds 127.0.0.1:19092. An earlier broker may still be running: `docker compose down`.
